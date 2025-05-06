@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+venv/
+*.env
+.env.*
+env/
+ENV/
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# AutoVol specific
+samples/*
+!samples/.gitkeep
+reports/*
+!reports/.gitkeep
+*.dmp
+*.mem
+*.raw
+*.vmem
+
+# Credentials - IMPORTANT
+*.json  # Be careful if you use service account keys, ensure they are not committed
+*.pem
