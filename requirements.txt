@@ -1,10 +1,12 @@
 annotated-types==0.7.0
+anthropic==0.51.0
 anyio==4.9.0
 Bottleneck==1.4.2
 cachetools==5.5.2
 certifi==2025.4.26
 charset-normalizer==3.4.2
 click==8.1.8
+distro==1.9.0
 docstring_parser==0.16
 google-api-core==2.24.2
 google-auth==2.40.0
@@ -25,11 +27,12 @@ httpcore==1.0.9
 httpx==0.28.1
 httpx-sse==0.4.0
 idna==3.10
+jiter==0.9.0
 jsonpatch==1.33
 jsonpointer==3.0.0
 langchain==0.3.25
+langchain-anthropic==0.3.12
 langchain-core==0.3.58
-langchain-google-vertexai==2.0.21
 langchain-text-splitters==0.3.8
 langgraph==0.4.1
 langgraph-checkpoint==2.0.25
