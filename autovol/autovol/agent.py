@@ -18,8 +18,12 @@ class AppState(TypedDict):
     investigation_log: List[Dict[str, str]]
 
 # --- LLM and Tools ---
-# Use the specified Claude 3.5 Sonnet model
-llm = ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=0.2)
+# Use the specified Claude 3.7 Sonnet model
+llm = ChatAnthropic(
+  model="claude-3-7-sonnet-latest",
+  max_tokens=64000,
+  thinking={"type": "enabled", "budget_tokens": 4000},
+)
 
 llm_with_tool = llm.bind_tools([volatility_runner_tool])
 
