@@ -1,23 +1,23 @@
 import os
-# import json # Not strictly needed anymore
 from datetime import datetime
 from pathlib import Path
+import uuid  # For thread_id
+from typing import Optional
 
 import typer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langgraph.types import Interrupt
 
 # Import the graph AFTER loading env vars
 load_dotenv()
-from .agent import app_graph, AppState  # Assuming AppState is correctly defined
-
-# from langgraph.graph import END # Not strictly needed for this streaming logic
+from .agent import app_graph, AppState
 
 # Initialize Typer app
 app = typer.Typer()
 
 
-# --- generate_report function remains largely the same ---
+# --- generate_report function (remains the same) ---
 def generate_report(log: list, dump_path: str, initial_context: str, profile: str, final_summary: str = "") -> str:
   timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
   report_filename = f"autovol_report_{Path(dump_path).stem}_{timestamp}.md"
@@ -31,7 +31,7 @@ def generate_report(log: list, dump_path: str, initial_context: str, profile: st
   report_content += f"**Initial Context/Suspicion:**\n```\n{initial_context}\n```\n\n"
 
   if final_summary:
-    report_content += f"## Final LLM Summary:\n\n```text\n{final_summary}\n```\n\n"  # Added code block for summary
+    report_content += f"## Final LLM Summary:\n\n```text\n{final_summary}\n```\n\n"
 
   report_content += "---\n\n## Investigation Steps\n\n"
 
@@ -41,25 +41,17 @@ def generate_report(log: list, dump_path: str, initial_context: str, profile: st
     for i, entry in enumerate(log):
       report_content += f"### Step {i + 1}\n\n"
       reasoning = entry.get('reasoning', 'N/A')
-      if isinstance(reasoning, list):
-        reasoning_text = ""
-        for item in reasoning:
-          if isinstance(item, dict) and item.get('type') == 'text':
-            reasoning_text += item.get('text', '') + "\n"
-          elif isinstance(item, str):
-            reasoning_text += item + "\n"
-        reasoning = reasoning_text.strip() if reasoning_text.strip() else "Complex reasoning object"
-      elif not isinstance(reasoning, str):
+      if not isinstance(reasoning, str):
         reasoning = str(reasoning)
 
-      report_content += f"**Reasoning/Action (LLM):**\n```\n{reasoning}\n```\n\n"
-      report_content += f"**Executed Command:**\n```bash\nvol.py -f <dump_path> {entry.get('command', 'N/A')}\n```\n\n"
-      report_content += f"**Output:**\n"
-      report_content += f"<details>\n<summary>Click to view output</summary>\n\n```text\n{entry.get('output', 'N/A')}\n```\n\n</details>\n\n"
+      report_content += f"**Reasoning/Action (LLM/User):**\n```\n{reasoning}\n```\n\n"
+      report_content += f"**Executed Command/Action:**\n```bash\n{entry.get('command', 'N/A')}\n```\n\n"
+      report_content += f"**Output/Result:**\n"
+      report_content += f"<details>\n<summary>Click to view output/result</summary>\n\n```text\n{entry.get('output', 'N/A')}\n```\n\n</details>\n\n"
       report_content += "---\n\n"
 
   try:
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding='utf-8') as f:
       f.write(report_content)
     return f"Report generated successfully at: {report_path}"
   except Exception as e:
@@ -75,7 +67,6 @@ def analyze(
   print(f"Dump File: {dump_path}")
   print(f"Initial Context: {context}")
 
-  # ... (environment variable checks remain the same) ...
   if not os.path.exists(dump_path):
     print(f"\nError: Memory dump file not found at '{dump_path}'")
     raise typer.Exit(code=1)
@@ -86,7 +77,7 @@ def analyze(
     print("\nError: ANTHROPIC_API_KEY environment variable is not set.")
     raise typer.Exit(code=1)
 
-  initial_state_dict: AppState = {  # Ensure this matches your AppState TypedDict
+  initial_state_dict: AppState = {
     "messages": [HumanMessage(content=context)],
     "dump_path": dump_path,
     "initial_context": context,
@@ -94,109 +85,193 @@ def analyze(
     "investigation_log": []
   }
 
-  config = {"recursion_limit": 50}
-  # This will hold the LATEST full state dictionary yielded by the stream
-  current_graph_state_snapshot: Optional[AppState] = None
-  # Keep track of the number of messages printed to avoid re-printing old ones
+  thread_id = str(uuid.uuid4())
+  config_for_stream = {"recursion_limit": 50, "configurable": {"thread_id": thread_id}}
+
+  next_stream_input = initial_state_dict
   num_messages_printed_for_cli = len(initial_state_dict["messages"])
+  final_full_state_for_report: Optional[AppState] = None
 
   try:
-    # According to langgraph-streaming.md, for stream_mode="values",
-    # `full_state_at_step` IS the AppState dictionary.
-    for full_state_at_step in app_graph.stream(
-      initial_state_dict,
-      config=config,
-      stream_mode="values"  # Explicitly using "values"
-    ):
-      # `full_state_at_step` is the entire state dictionary at this point.
-      current_graph_state_snapshot = full_state_at_step
+    while True:
+      print(f"\n--- Graph Cycle (Input type: {type(next_stream_input)}) ---")
 
-      # --- Enhanced CLI Streaming ---
-      # We want to print new AI messages or Tool messages as they appear.
-      # The `full_state_at_step` contains all messages up to this point.
-      if isinstance(full_state_at_step, dict) and "messages" in full_state_at_step:
-        all_messages_now = full_state_at_step["messages"]
-        # Print only new messages
-        new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
+      async_gen = app_graph.stream(
+        next_stream_input,
+        config=config_for_stream,
+        stream_mode="updates"
+      )
 
-        if new_messages_to_print:
-          print(f"\n--- New Streamed Output ---")  # Indicate a new batch of output
-          for msg in new_messages_to_print:
-            if isinstance(msg, AIMessage):
-              ai_content_print = ""
-              if isinstance(msg.content, list):
-                for block in msg.content:
-                  if block.get("type") == "text":
-                    ai_content_print += block.get("text", "") + "\n"
-              elif isinstance(msg.content, str):
-                ai_content_print = msg.content
+      interrupted_this_cycle = False
+      next_stream_input = None
 
-              print(f"AI: {ai_content_print.strip()}")
-              if msg.tool_calls:
-                print(f"Tool Call Requested: {msg.tool_calls}")
-            elif isinstance(msg, ToolMessage):
-              # To avoid overly verbose output for long tool results,
-              # you might summarize or truncate here for CLI.
-              # The full output is in the investigation_log.
-              tool_output_summary = msg.content
-              if len(tool_output_summary) > 300:  # Example truncation
-                tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
-              print(f"Tool Result ({msg.tool_call_id}):\n{tool_output_summary}")
+      for chunk in async_gen:
+        print(f"Raw Stream Chunk: {chunk}")
 
-          num_messages_printed_for_cli = len(all_messages_now)  # Update the count
+        if not isinstance(chunk, dict):
+          print(f"Warning: Stream yielded non-dict chunk: {chunk}")
+          continue
 
-      # The "Event from Node: <key>" prints were because of the old loop.
-      # If you want to know which node *just ran* to produce this `full_state_at_step`,
-      # `stream_mode="updates"` is better, or you'd have to compare
-      # `full_state_at_step` with the *previous* state to see what changed.
-      # For "values", we just get the whole state.
+        if "__interrupt__" in chunk:
+          interrupted_this_cycle = True
+          interrupt_tuple = chunk["__interrupt__"]
+          if not isinstance(interrupt_tuple, tuple) or not interrupt_tuple:
+            print("Error: __interrupt__ value is not a valid tuple.")
+            next_stream_input = {"action": "error", "reason": "Malformed interrupt signal"}
+            break
 
+          interrupt_object = interrupt_tuple[0]
+          if not isinstance(interrupt_object, Interrupt):  # Check using the imported Interrupt class
+            print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
+            next_stream_input = {"action": "error", "reason": "Malformed interrupt payload type"}
+            break
+
+          interrupt_payload = interrupt_object.value
+
+          print("\n--- Human Input Required ---")
+
+          reasoning_display = interrupt_payload.get("reasoning_and_thinking", "No reasoning provided.")
+          tool_args_to_review = interrupt_payload.get("tool_call_args", {})
+          current_profile = interrupt_payload.get("profile", "N/A")
+
+          print(f"\nLLM Reasoning & Thinking:\n{reasoning_display}\n")
+
+          plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
+          plugin_args = tool_args_to_review.get('plugin_args', [])
+          typer.echo(f"Proposed command: ", nl=False)
+          typer.secho(f"{current_profile}.{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
+
+          while True:
+            action_choice = typer.prompt("Approve (a), Modify (m), or Deny (d) the command?").lower()
+            if action_choice in ['a', 'm', 'd']:
+              break
+            typer.echo("Invalid choice. Please enter 'a', 'm', or 'd'.", err=True)
+
+          user_decision_payload = {}
+          if action_choice == 'a':
+            user_decision_payload = {"action": "approve"}
+          elif action_choice == 'd':
+            denial_reason = typer.prompt("Reason for denial (optional, press Enter for default):",
+                                         default="User denied without specific reason.", show_default=False)
+            user_decision_payload = {"action": "deny", "reason": denial_reason}
+          elif action_choice == 'm':
+            modified_plugin_name = typer.prompt(f"New plugin name (current: {plugin_name})", default=plugin_name)
+            current_args_str = ' '.join(plugin_args)
+            modified_args_str = typer.prompt(f"New plugin args (space-separated, current: '{current_args_str}')",
+                                             default=current_args_str)
+            modified_plugin_args = modified_args_str.split() if modified_args_str else []
+
+            user_decision_payload = {
+              "action": "modify",
+              "modified_tool_args": {
+                "plugin_name": modified_plugin_name,
+                "plugin_args": modified_plugin_args
+              }
+            }
+
+          next_stream_input = user_decision_payload
+          break
+
+        else:
+          if not chunk:
+            print("Stream yielded an empty update chunk.")
+            continue
+
+          node_name_that_ran = list(chunk.keys())[0]
+
+          final_full_state_for_report = app_graph.get_state(config_for_stream)
+
+          if final_full_state_for_report and "messages" in final_full_state_for_report:
+            all_messages_now = final_full_state_for_report["messages"]
+            new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
+
+            if new_messages_to_print:
+              print(f"\n--- New Streamed Output (from node: {node_name_that_ran}) ---")
+              for msg in new_messages_to_print:
+                if isinstance(msg, AIMessage):
+                  ai_content_print = ""
+                  if isinstance(msg.content, list):
+                    for block in msg.content:
+                      if block.get("type") == "text":
+                        ai_content_print += block.get("text", "") + "\n"
+                  elif isinstance(msg.content, str):
+                    ai_content_print = msg.content
+                  print(f"AI: {ai_content_print.strip()}")
+                  if msg.tool_calls:
+                    print(f"Tool Call Proposed by AI: {msg.tool_calls}")
+                elif isinstance(msg, ToolMessage):
+                  tool_output_summary = msg.content
+                  if len(tool_output_summary) > 300:
+                    tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
+                  print(f"Tool Result ({msg.tool_call_id}):\n{tool_output_summary}")
+                elif isinstance(msg, HumanMessage):
+                  print(f"User/System: {msg.content}")
+              num_messages_printed_for_cli = len(all_messages_now)
+
+      if interrupted_this_cycle:
+        continue
+      else:
+        print("\n--- Graph Execution Fully Finished ---")
+        final_full_state_for_report = app_graph.get_state(config_for_stream)
+        raise StopIteration
+
+  except StopIteration:
+    pass
   except Exception as e:
     print(f"\n--- An error occurred during graph execution ---")
-    print(e)
-    # Use current_graph_state_snapshot for partial report
-    if current_graph_state_snapshot and isinstance(current_graph_state_snapshot,
-                                                   dict) and "investigation_log" in current_graph_state_snapshot:
+    print(f"{type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+    try:
+      final_full_state_for_report = app_graph.get_state(config_for_stream)
+    except Exception as get_state_err:
+      print(f"Could not retrieve state for partial report after error: {get_state_err}")
+      if final_full_state_for_report is None:
+        final_full_state_for_report = initial_state_dict
+
+    if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
       print("\nAttempting to generate partial report...")
       report_msg = generate_report(
-        current_graph_state_snapshot.get("investigation_log", []),
-        current_graph_state_snapshot.get("dump_path", dump_path),
-        current_graph_state_snapshot.get("initial_context", context),
-        current_graph_state_snapshot.get("profile", "Unknown")
+        final_full_state_for_report.get("investigation_log", []),
+        final_full_state_for_report.get("dump_path", dump_path),
+        final_full_state_for_report.get("initial_context", context),
+        final_full_state_for_report.get("profile", "Unknown")
       )
       print(report_msg)
     else:
-      # ... (debug prints for error case) ...
-      print("Could not generate partial report: current_graph_state_snapshot is insufficient.")
-      if current_graph_state_snapshot is not None:
-        print(
-          f"DEBUG (Exception): current_graph_state_snapshot type: {type(current_graph_state_snapshot)}, keys: {list(current_graph_state_snapshot.keys()) if isinstance(current_graph_state_snapshot, dict) else 'Not a dict'}")
-      else:
-        print(f"DEBUG (Exception): current_graph_state_snapshot is None.")
+      print("Could not generate partial report: State is insufficient or unavailable.")
     raise typer.Exit(code=1)
 
   print("\n--- Analysis Complete ---")
 
-  if current_graph_state_snapshot and isinstance(current_graph_state_snapshot,
-                                                 dict) and "investigation_log" in current_graph_state_snapshot:
+  if final_full_state_for_report is None:
+    try:
+      final_full_state_for_report = app_graph.get_state(config_for_stream)
+    except Exception:
+      print("Warning: Could not retrieve final state for report after graph completion.")
+      final_full_state_for_report = initial_state_dict
+
+  if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
     print("Generating final report...")
-    final_log = current_graph_state_snapshot.get("investigation_log", [])
-    # ... (rest of the report generation logic using current_graph_state_snapshot) ...
-    final_dump_path = current_graph_state_snapshot.get("dump_path", dump_path)
-    final_initial_context = current_graph_state_snapshot.get("initial_context", context)
-    final_profile = current_graph_state_snapshot.get("profile", "Unknown")
+    final_log = final_full_state_for_report.get("investigation_log", [])
+    final_dump_path = final_full_state_for_report.get("dump_path", dump_path)
+    final_initial_context = final_full_state_for_report.get("initial_context", context)
+    final_profile = final_full_state_for_report.get("profile", "Unknown")
 
     final_summary_text = ""
-    if current_graph_state_snapshot.get("messages"):
-      for msg_obj in reversed(current_graph_state_snapshot["messages"]):  # Renamed to avoid conflict
+    if final_full_state_for_report.get("messages"):
+      for msg_obj in reversed(final_full_state_for_report["messages"]):
         if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:
           if isinstance(msg_obj.content, str):
             final_summary_text = msg_obj.content
             break
           elif isinstance(msg_obj.content, list):
-            final_summary_text = "".join(
-              [block.get("text", "") for block in msg_obj.content if block.get("type") == "text"])
-            break
+            text_parts = [block.get("text", "") for block in msg_obj.content if block.get("type") == "text"]
+            final_summary_text = "".join(text_parts).strip()
+            if final_summary_text: break
+      if not final_summary_text:
+        final_summary_text = "No final summary message found from AI."
 
     report_msg = generate_report(
       final_log,
@@ -206,20 +281,8 @@ def analyze(
       final_summary=final_summary_text
     )
     print(report_msg)
-
   else:
-    # ... (debug prints for final report failure) ...
-    print("Warning: Could not retrieve final state to generate report.")
-    if current_graph_state_snapshot is not None and isinstance(current_graph_state_snapshot, dict):
-      print(
-        f"DEBUG (Report Gen Failed): current_graph_state_snapshot keys: {list(current_graph_state_snapshot.keys())}")
-      print(
-        f"DEBUG (Report Gen Failed): 'investigation_log' present: {'investigation_log' in current_graph_state_snapshot}")
-      # print(f"DEBUG (Report Gen Failed): 'investigation_log' content: {current_graph_state_snapshot.get('investigation_log')}") # Can be verbose
-    elif current_graph_state_snapshot is None:
-      print(f"DEBUG (Report Gen Failed): current_graph_state_snapshot is None.")
-    else:
-      print(f"DEBUG (Report Gen Failed): current_graph_state_snapshot type: {type(current_graph_state_snapshot)}")
+    print("Warning: Could not generate final report due to missing state.")
 
 
 if __name__ == "__main__":
