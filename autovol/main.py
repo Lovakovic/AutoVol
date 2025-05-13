@@ -69,12 +69,12 @@ def analyze(
   final_full_state_for_report: Optional[AppState] = initial_state_dict
 
   ai_content_was_streamed_for_current_ai_message = False
+  id_of_ai_message_content_streamed: Optional[str] = None
 
   try:
     while True:
-      print(f"\n--- Top of WHILE loop. Input type for graph: {type(current_input_for_graph_stream)} ---")
-      if isinstance(current_input_for_graph_stream, Command):
-        print(f"DEBUG: Resuming graph with Command: {vars(current_input_for_graph_stream)}")
+      if not isinstance(current_input_for_graph_stream, Command):
+        print(f"\n--- Agent Reasoning Cycle ---")
 
       should_continue_while_loop_after_this_cycle = False
       input_for_next_graph_cycle = None
@@ -85,23 +85,17 @@ def analyze(
         stream_mode=["updates", "messages"]
       )
 
-      print("DEBUG: Starting FOR loop to process graph stream chunks.")
       for i, raw_chunk_from_graph in enumerate(async_gen):
-        print(f"DEBUG: FOR loop iteration {i}. Raw chunk: {str(raw_chunk_from_graph)[:300]}...")
-
         current_graph_state_candidate = app_graph.get_state(config_for_stream)
         if current_graph_state_candidate:
           final_full_state_for_report = cast(AppState, current_graph_state_candidate.values)
 
-          # --- MODIFIED INTERRUPT CHECK ---
         is_interrupt_chunk = False
         interrupt_data_payload = None
 
         if isinstance(raw_chunk_from_graph, dict) and "__interrupt__" in raw_chunk_from_graph:
-          # This case might not happen if interrupts always come via 'updates' mode when combined.
           is_interrupt_chunk = True
           interrupt_data_payload = raw_chunk_from_graph["__interrupt__"]
-          print("DEBUG: Interrupt chunk detected (direct dict).")
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name_for_interrupt_check, chunk_data_for_interrupt_check = raw_chunk_from_graph
           if stream_mode_name_for_interrupt_check == "updates" and \
@@ -109,8 +103,6 @@ def analyze(
             "__interrupt__" in chunk_data_for_interrupt_check:
             is_interrupt_chunk = True
             interrupt_data_payload = chunk_data_for_interrupt_check["__interrupt__"]
-            print("DEBUG: Interrupt chunk detected (nested in 'updates' tuple).")
-        # --- END OF MODIFIED INTERRUPT CHECK ---
 
         if is_interrupt_chunk:
           should_continue_while_loop_after_this_cycle = True
@@ -118,22 +110,21 @@ def analyze(
           if ai_content_was_streamed_for_current_ai_message:
             print()
             ai_content_was_streamed_for_current_ai_message = False
+            id_of_ai_message_content_streamed = None
 
-          # interrupt_data_payload should be set if is_interrupt_chunk is True
-          if interrupt_data_payload is None:  # Should not happen due to logic above
+          if interrupt_data_payload is None:
             print("CRITICAL ERROR: is_interrupt_chunk is true but interrupt_data_payload is None.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Internal error processing interrupt structure."}
             )
             break
 
-          interrupt_tuple_from_graph = interrupt_data_payload  # Already extracted
+          interrupt_tuple_from_graph = interrupt_data_payload
 
           if not isinstance(interrupt_tuple_from_graph, tuple) or not interrupt_tuple_from_graph:
             print("Error: __interrupt__ value is not a valid tuple.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
-            print(f"DEBUG: Set input_for_next_graph_cycle due to malformed tuple. Breaking FOR loop.")
             break
 
           interrupt_object = interrupt_tuple_from_graph[0]
@@ -141,22 +132,30 @@ def analyze(
             print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt payload type from graph"})
-            print(f"DEBUG: Set input_for_next_graph_cycle due to malformed Interrupt object. Breaking FOR loop.")
             break
 
-          interrupt_payload_from_graph_value = interrupt_object.value  # Use .value attribute
-          print("\n--- Human Input Required ---")
-          reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking", "No reasoning provided.")
+          interrupt_payload_from_graph_value = interrupt_object.value
+          # MODIFIED: Changed section header
+          print("\n\n--- Agent Proposes Command: Human Input Required ---")
+
+          # REMOVED: Redundant reasoning print, as it was just streamed.
+          # reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking", "No reasoning provided.")
+          # print(f"\nLLM Reasoning for this proposal:\n{reasoning_display}\n") # REMOVED
+
           tool_args_to_review = interrupt_payload_from_graph_value.get("tool_call_args", {})
 
           user_decision_payload = {}
           if interrupt_payload_from_graph_value.get("error_condition"):
-            print(f"Error condition from review node: {reasoning_display}")
-            user_decision_payload = {"action": "internal_error_at_review", "reason": reasoning_display}
+            # If there's an error condition, we might want to display the reasoning/error.
+            error_reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking",
+                                                                             "Error: No specific reason provided for error condition.")
+            print(f"Error condition from review node: {error_reasoning_display}")
+            user_decision_payload = {"action": "internal_error_at_review", "reason": error_reasoning_display}
           else:
-            print(f"\nLLM Reasoning & Thinking (Full, from interrupt payload):\n{reasoning_display}\n")
             plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
             plugin_args = tool_args_to_review.get('plugin_args', [])
+            # Add a newline before the proposed command for clarity
+            print()
             typer.echo(f"Proposed command: ", nl=False)
             typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
 
@@ -186,29 +185,24 @@ def analyze(
                 }
               }
           input_for_next_graph_cycle = Command(resume=user_decision_payload)
-          print(f"DEBUG: Set input_for_next_graph_cycle based on user decision. Breaking FOR loop.")
           break
 
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
-          # This 'elif' now correctly handles non-interrupt tuple chunks
           stream_mode_name, chunk_data = raw_chunk_from_graph
 
           if stream_mode_name == "messages":
             message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
             if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
               if not ai_content_was_streamed_for_current_ai_message:
-                print(f"\nAI Stream ({metadata.get('langgraph_node', 'LLM')}): ", end="")
+                print(f"AI: ", end="")
+                id_of_ai_message_content_streamed = message_chunk.id
               print(message_chunk.content, end="", flush=True)
               ai_content_was_streamed_for_current_ai_message = True
 
           elif stream_mode_name == "updates":
-            # The interrupt case for 'updates' is now handled above.
-            # This part only handles regular 'updates' data.
             if not chunk_data:
               continue
 
-            # Check if this 'updates' chunk itself is an interrupt (already done above)
-            # So, if we reach here, 'chunk_data' is a normal node update dictionary.
             node_name_that_ran = list(chunk_data.keys())[0]
 
             if final_full_state_for_report and "messages" in final_full_state_for_report:
@@ -216,19 +210,23 @@ def analyze(
               new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
 
               if new_messages_to_print:
-                if ai_content_was_streamed_for_current_ai_message and node_name_that_ran == "agent":
+                if ai_content_was_streamed_for_current_ai_message and \
+                  node_name_that_ran == "agent" and \
+                  new_messages_to_print and \
+                  isinstance(new_messages_to_print[0], AIMessage) and \
+                  new_messages_to_print[0].id == id_of_ai_message_content_streamed:
                   print()
-                print(f"\n--- State Update (from node: {node_name_that_ran}) ---")
+
                 for msg_idx, msg in enumerate(new_messages_to_print):
-                  print(f"DEBUG: Processing new message for print: type {type(msg)}, content: {str(msg.content)[:100]}")
                   if isinstance(msg, AIMessage):
-                    is_same_as_streamed = False
-                    if ai_content_was_streamed_for_current_ai_message and msg_idx == 0:
-                      is_same_as_streamed = True
-                    if is_same_as_streamed:
-                      print(f"AI: [Content was streamed token-by-token above]")
-                      if node_name_that_ran == "agent":
-                        ai_content_was_streamed_for_current_ai_message = False
+                    content_already_streamed_for_this_msg = (
+                      ai_content_was_streamed_for_current_ai_message and
+                      msg.id == id_of_ai_message_content_streamed
+                    )
+
+                    if content_already_streamed_for_this_msg:
+                      ai_content_was_streamed_for_current_ai_message = False
+                      id_of_ai_message_content_streamed = None
                     else:
                       ai_content_print = ""
                       if isinstance(msg.content, list):
@@ -237,41 +235,55 @@ def analyze(
                             ai_content_print += block_content.get("text", "") + "\n"
                       elif isinstance(msg.content, str):
                         ai_content_print = msg.content
-                      print(f"AI: {ai_content_print.strip()}")
+                      if ai_content_print.strip():
+                        print(f"AI: {ai_content_print.strip()}")
+
                     if msg.tool_calls:
-                      print(f"Tool Call Proposed by AI: {msg.tool_calls}")
+                      tool_call_summary_parts = []
+                      for tc in msg.tool_calls:
+                        tc_plugin = tc['args'].get('plugin_name', 'N/A')
+                        tc_plugin_args_list = tc['args'].get('plugin_args', [])
+                        tc_plugin_args_str = ' '.join(tc_plugin_args_list) if tc_plugin_args_list else ""
+                        tool_call_summary_parts.append(f"{tc_plugin} {tc_plugin_args_str}".strip())
+                      # Added newline before tool call proposal if content wasn't streamed or if it was but content was empty.
+                      # If content was streamed, a newline should already be there.
+                      if not content_already_streamed_for_this_msg or not msg.content:
+                        print()
+                      print(f"Tool Call Proposed: {', '.join(tool_call_summary_parts)}")
+                      print()  # Add a newline after the tool call proposal
+
                   elif isinstance(msg, ToolMessage):
+                    print()
                     tool_output_summary = msg.content
                     if len(tool_output_summary) > 300:
                       tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
                     print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_summary}")
+                    print()
                   elif isinstance(msg, HumanMessage):
-                    print(f"User/System: {msg.content}")
+                    if num_messages_printed_for_cli > 0 or msg is not all_messages_now[0]:
+                      print(f"System/User Feedback: {msg.content}")
                 num_messages_printed_for_cli = len(all_messages_now)
           else:
             print(f"Warning: Received chunk for unhandled stream mode: {stream_mode_name} with data: {chunk_data}")
         else:
           print(f"Warning: Stream yielded an unrecognized chunk format: {raw_chunk_from_graph}")
 
-      print(
-        f"DEBUG: Exited FOR loop. should_continue_while_loop_after_this_cycle: {should_continue_while_loop_after_this_cycle}")
-
       if should_continue_while_loop_after_this_cycle:
         if input_for_next_graph_cycle is None:
           print("CRITICAL ERROR: Interrupt was signaled, but no input_for_next_graph_cycle was set. Terminating.")
           raise StopIteration("Interrupt handling logical error")
         current_input_for_graph_stream = input_for_next_graph_cycle
-        print(f"DEBUG: Continuing WHILE loop. Next graph input will be: {str(current_input_for_graph_stream)[:100]}")
         continue
       else:
         if ai_content_was_streamed_for_current_ai_message:
           print()
           ai_content_was_streamed_for_current_ai_message = False
-        print("\n--- Graph Execution Fully Finished (stream ended naturally, no further interrupts) ---")
+          id_of_ai_message_content_streamed = None
+        print("\n--- Analysis Concluded by Agent ---")
         raise StopIteration
 
   except StopIteration:
-    print("Graph execution completed normally.")
+    print("Agent interaction cycle completed.")
   except Exception as e:
     print(f"\n--- An error occurred during graph execution ---")
     print(f"{type(e).__name__}: {e}")
@@ -281,7 +293,7 @@ def analyze(
   finally:
     if ai_content_was_streamed_for_current_ai_message:
       print()
-    print("\n--- Analysis Complete (or Terminated) ---")
+    print("\n--- AutoVol Session Ended ---")
     if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
       print("Generating final report...")
       final_log = final_full_state_for_report.get("investigation_log", [])
@@ -294,22 +306,24 @@ def analyze(
       if isinstance(messages_in_final_state, list):
         for msg_obj in reversed(messages_in_final_state):
           if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:
+            current_msg_text_parts = []
             if isinstance(msg_obj.content, str):
-              final_summary_text = msg_obj.content
-              break
+              current_msg_text_parts.append(msg_obj.content)
             elif isinstance(msg_obj.content, list):
-              text_parts = []
               for _content_block in msg_obj.content:
                 if isinstance(_content_block, dict) and _content_block.get("type") == "text":
-                  text_parts.append(_content_block.get("text", ""))
-              final_summary_text = "".join(text_parts).strip()
-              if final_summary_text: break
+                  current_msg_text_parts.append(_content_block.get("text", ""))
+
+            assembled_text = "".join(current_msg_text_parts).strip()
+            if assembled_text:
+              final_summary_text = assembled_text
+              break
 
       report_msg = generate_report(
         log=final_log,
         dump_path=final_dump_path,
         initial_context=final_initial_context,
-        profile=final_profile,
+        profile=str(final_profile),
         final_summary=final_summary_text
       )
       print(report_msg)
