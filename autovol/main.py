@@ -1,22 +1,18 @@
 import os
 import uuid
-from typing import Optional
-from pathlib import Path  # Added import
+from typing import Optional, cast, Any
+from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
 from langgraph.types import Interrupt, Command
 
 # Load .env before other project imports that might need env vars
 load_dotenv()
 
 # Attempt to set GOOGLE_APPLICATION_CREDENTIALS from a local key file
-# This should be done early, before 'app_graph' from '.agent' is imported if it initializes the LLM globally
 VERTEX_KEY_FILENAME = "vertex_key.json"
-# Assuming main.py is in autovol/, so project_root is one level up.
-# If your script is run from project root, and main.py is in autovol/, this path is correct.
-# If main.py is at project root, then project_root = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VERTEX_KEY_PATH = PROJECT_ROOT / VERTEX_KEY_FILENAME
 
@@ -24,12 +20,11 @@ if VERTEX_KEY_PATH.exists():
   os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(VERTEX_KEY_PATH)
   print(f"INFO: Set GOOGLE_APPLICATION_CREDENTIALS to: {VERTEX_KEY_PATH}")
 elif not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-  # Only print warning if it's not set by other means (e.g. user's global env)
   print(
     f"Warning: '{VERTEX_KEY_FILENAME}' not found at '{PROJECT_ROOT}' and GOOGLE_APPLICATION_CREDENTIALS is not otherwise set.")
   print("         The application will likely fail to authenticate with Google Cloud Vertex AI.")
 
-from .agent import app_graph, AppState  # Now import agent stuff
+from .agent import app_graph, AppState
 from .reporting import generate_report
 
 app = typer.Typer()
@@ -51,7 +46,6 @@ def analyze(
     print("\nError: VOLATILITY3_PATH environment variable is not set.")
     raise typer.Exit(code=1)
 
-  # Updated environment variable check
   if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     print("\nError: GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.")
     print(f"       Please ensure it points to your Google Cloud service account JSON key file,")
@@ -70,65 +64,97 @@ def analyze(
   thread_id = str(uuid.uuid4())
   config_for_stream = {"recursion_limit": 50, "configurable": {"thread_id": thread_id}}
 
-  next_stream_input = initial_state_dict
+  current_input_for_graph_stream: Any = initial_state_dict
   num_messages_printed_for_cli = len(initial_state_dict.get("messages", []))
   final_full_state_for_report: Optional[AppState] = initial_state_dict
 
+  ai_content_was_streamed_for_current_ai_message = False
+
   try:
     while True:
-      print(f"\n--- Graph Cycle (Input type: {type(next_stream_input)}) ---")
-      if isinstance(next_stream_input, Command):
-        print(f"Resuming with Command object.")
+      print(f"\n--- Top of WHILE loop. Input type for graph: {type(current_input_for_graph_stream)} ---")
+      if isinstance(current_input_for_graph_stream, Command):
+        print(f"DEBUG: Resuming graph with Command: {vars(current_input_for_graph_stream)}")
 
-      # Make sure app_graph is defined before this loop; it is via import.
-      async_gen = app_graph.stream(  # type: ignore
-        next_stream_input,
+      should_continue_while_loop_after_this_cycle = False
+      input_for_next_graph_cycle = None
+
+      async_gen = app_graph.stream(
+        current_input_for_graph_stream,
         config=config_for_stream,
-        stream_mode="updates"
+        stream_mode=["updates", "messages"]
       )
 
-      interrupted_this_cycle = False
-      next_stream_input_after_cycle = None
+      print("DEBUG: Starting FOR loop to process graph stream chunks.")
+      for i, raw_chunk_from_graph in enumerate(async_gen):
+        print(f"DEBUG: FOR loop iteration {i}. Raw chunk: {str(raw_chunk_from_graph)[:300]}...")
 
-      for chunk in async_gen:
-        print(f"Raw Stream Chunk: {chunk}")
-
-        if not isinstance(chunk, dict):
-          print(f"Warning: Stream yielded non-dict chunk: {chunk}")
-          continue
-
-        current_graph_state_candidate = app_graph.get_state(config_for_stream)  # type: ignore
+        current_graph_state_candidate = app_graph.get_state(config_for_stream)
         if current_graph_state_candidate:
-          final_full_state_for_report = current_graph_state_candidate.values  # type: ignore
+          final_full_state_for_report = cast(AppState, current_graph_state_candidate.values)
 
-        if "__interrupt__" in chunk:
-          interrupted_this_cycle = True
-          interrupt_tuple = chunk["__interrupt__"]
+          # --- MODIFIED INTERRUPT CHECK ---
+        is_interrupt_chunk = False
+        interrupt_data_payload = None
 
-          if not isinstance(interrupt_tuple, tuple) or not interrupt_tuple:
-            print("Error: __interrupt__ value is not a valid tuple.")
-            next_stream_input_after_cycle = Command(
-              resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
+        if isinstance(raw_chunk_from_graph, dict) and "__interrupt__" in raw_chunk_from_graph:
+          # This case might not happen if interrupts always come via 'updates' mode when combined.
+          is_interrupt_chunk = True
+          interrupt_data_payload = raw_chunk_from_graph["__interrupt__"]
+          print("DEBUG: Interrupt chunk detected (direct dict).")
+        elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
+          stream_mode_name_for_interrupt_check, chunk_data_for_interrupt_check = raw_chunk_from_graph
+          if stream_mode_name_for_interrupt_check == "updates" and \
+            isinstance(chunk_data_for_interrupt_check, dict) and \
+            "__interrupt__" in chunk_data_for_interrupt_check:
+            is_interrupt_chunk = True
+            interrupt_data_payload = chunk_data_for_interrupt_check["__interrupt__"]
+            print("DEBUG: Interrupt chunk detected (nested in 'updates' tuple).")
+        # --- END OF MODIFIED INTERRUPT CHECK ---
+
+        if is_interrupt_chunk:
+          should_continue_while_loop_after_this_cycle = True
+
+          if ai_content_was_streamed_for_current_ai_message:
+            print()
+            ai_content_was_streamed_for_current_ai_message = False
+
+          # interrupt_data_payload should be set if is_interrupt_chunk is True
+          if interrupt_data_payload is None:  # Should not happen due to logic above
+            print("CRITICAL ERROR: is_interrupt_chunk is true but interrupt_data_payload is None.")
+            input_for_next_graph_cycle = Command(
+              resume={"action": "internal_error_at_review", "reason": "Internal error processing interrupt structure."}
+            )
             break
 
-          interrupt_object = interrupt_tuple[0]
+          interrupt_tuple_from_graph = interrupt_data_payload  # Already extracted
+
+          if not isinstance(interrupt_tuple_from_graph, tuple) or not interrupt_tuple_from_graph:
+            print("Error: __interrupt__ value is not a valid tuple.")
+            input_for_next_graph_cycle = Command(
+              resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
+            print(f"DEBUG: Set input_for_next_graph_cycle due to malformed tuple. Breaking FOR loop.")
+            break
+
+          interrupt_object = interrupt_tuple_from_graph[0]
           if not isinstance(interrupt_object, Interrupt):
             print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
-            next_stream_input_after_cycle = Command(
+            input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt payload type from graph"})
+            print(f"DEBUG: Set input_for_next_graph_cycle due to malformed Interrupt object. Breaking FOR loop.")
             break
 
-          interrupt_payload_from_graph = interrupt_object.value
-
+          interrupt_payload_from_graph_value = interrupt_object.value  # Use .value attribute
           print("\n--- Human Input Required ---")
-          reasoning_display = interrupt_payload_from_graph.get("reasoning_and_thinking", "No reasoning provided.")
-          tool_args_to_review = interrupt_payload_from_graph.get("tool_call_args", {})
+          reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking", "No reasoning provided.")
+          tool_args_to_review = interrupt_payload_from_graph_value.get("tool_call_args", {})
 
-          if interrupt_payload_from_graph.get("error_condition"):
+          user_decision_payload = {}
+          if interrupt_payload_from_graph_value.get("error_condition"):
             print(f"Error condition from review node: {reasoning_display}")
             user_decision_payload = {"action": "internal_error_at_review", "reason": reasoning_display}
           else:
-            print(f"\nLLM Reasoning & Thinking:\n{reasoning_display}\n")
+            print(f"\nLLM Reasoning & Thinking (Full, from interrupt payload):\n{reasoning_display}\n")
             plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
             plugin_args = tool_args_to_review.get('plugin_args', [])
             typer.echo(f"Proposed command: ", nl=False)
@@ -140,7 +166,6 @@ def analyze(
                 break
               typer.echo("Invalid choice. Please enter 'a', 'm', or 'd'.", err=True)
 
-            user_decision_payload = {}
             if action_choice == 'a':
               user_decision_payload = {"action": "approve"}
             elif action_choice == 'd':
@@ -160,51 +185,89 @@ def analyze(
                   "plugin_args": modified_plugin_args
                 }
               }
-          next_stream_input_after_cycle = Command(resume=user_decision_payload)  # type: ignore
+          input_for_next_graph_cycle = Command(resume=user_decision_payload)
+          print(f"DEBUG: Set input_for_next_graph_cycle based on user decision. Breaking FOR loop.")
           break
+
+        elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
+          # This 'elif' now correctly handles non-interrupt tuple chunks
+          stream_mode_name, chunk_data = raw_chunk_from_graph
+
+          if stream_mode_name == "messages":
+            message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
+            if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
+              if not ai_content_was_streamed_for_current_ai_message:
+                print(f"\nAI Stream ({metadata.get('langgraph_node', 'LLM')}): ", end="")
+              print(message_chunk.content, end="", flush=True)
+              ai_content_was_streamed_for_current_ai_message = True
+
+          elif stream_mode_name == "updates":
+            # The interrupt case for 'updates' is now handled above.
+            # This part only handles regular 'updates' data.
+            if not chunk_data:
+              continue
+
+            # Check if this 'updates' chunk itself is an interrupt (already done above)
+            # So, if we reach here, 'chunk_data' is a normal node update dictionary.
+            node_name_that_ran = list(chunk_data.keys())[0]
+
+            if final_full_state_for_report and "messages" in final_full_state_for_report:
+              all_messages_now = final_full_state_for_report["messages"]
+              new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
+
+              if new_messages_to_print:
+                if ai_content_was_streamed_for_current_ai_message and node_name_that_ran == "agent":
+                  print()
+                print(f"\n--- State Update (from node: {node_name_that_ran}) ---")
+                for msg_idx, msg in enumerate(new_messages_to_print):
+                  print(f"DEBUG: Processing new message for print: type {type(msg)}, content: {str(msg.content)[:100]}")
+                  if isinstance(msg, AIMessage):
+                    is_same_as_streamed = False
+                    if ai_content_was_streamed_for_current_ai_message and msg_idx == 0:
+                      is_same_as_streamed = True
+                    if is_same_as_streamed:
+                      print(f"AI: [Content was streamed token-by-token above]")
+                      if node_name_that_ran == "agent":
+                        ai_content_was_streamed_for_current_ai_message = False
+                    else:
+                      ai_content_print = ""
+                      if isinstance(msg.content, list):
+                        for block_content in msg.content:
+                          if isinstance(block_content, dict) and block_content.get("type") == "text":
+                            ai_content_print += block_content.get("text", "") + "\n"
+                      elif isinstance(msg.content, str):
+                        ai_content_print = msg.content
+                      print(f"AI: {ai_content_print.strip()}")
+                    if msg.tool_calls:
+                      print(f"Tool Call Proposed by AI: {msg.tool_calls}")
+                  elif isinstance(msg, ToolMessage):
+                    tool_output_summary = msg.content
+                    if len(tool_output_summary) > 300:
+                      tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
+                    print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_summary}")
+                  elif isinstance(msg, HumanMessage):
+                    print(f"User/System: {msg.content}")
+                num_messages_printed_for_cli = len(all_messages_now)
+          else:
+            print(f"Warning: Received chunk for unhandled stream mode: {stream_mode_name} with data: {chunk_data}")
         else:
-          if not chunk:
-            print("Stream yielded an empty update chunk.")
-            continue
+          print(f"Warning: Stream yielded an unrecognized chunk format: {raw_chunk_from_graph}")
 
-          node_name_that_ran = list(chunk.keys())[0]
+      print(
+        f"DEBUG: Exited FOR loop. should_continue_while_loop_after_this_cycle: {should_continue_while_loop_after_this_cycle}")
 
-          # final_full_state_for_report was updated via get_state() at the start of chunk processing
-          # Ensure final_full_state_for_report is a dict before accessing "messages"
-          if final_full_state_for_report and isinstance(final_full_state_for_report,
-                                                        dict) and "messages" in final_full_state_for_report:
-            all_messages_now = final_full_state_for_report["messages"]
-            new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
-
-            if new_messages_to_print:
-              print(f"\n--- New Streamed Output (from node: {node_name_that_ran}) ---")
-              for msg in new_messages_to_print:
-                if isinstance(msg, AIMessage):
-                  ai_content_print = ""
-                  if isinstance(msg.content, list):
-                    for block_content in msg.content:
-                      if isinstance(block_content, dict) and block_content.get("type") == "text":
-                        ai_content_print += block_content.get("text", "") + "\n"
-                  elif isinstance(msg.content, str):
-                    ai_content_print = msg.content
-                  print(f"AI: {ai_content_print.strip()}")
-                  if msg.tool_calls:
-                    print(f"Tool Call Proposed by AI: {msg.tool_calls}")
-                elif isinstance(msg, ToolMessage):
-                  tool_output_summary = msg.content
-                  if len(tool_output_summary) > 300:
-                    tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
-                  print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_summary}")
-                elif isinstance(msg, HumanMessage):
-                  print(f"User/System: {msg.content}")
-              num_messages_printed_for_cli = len(all_messages_now)
-
-      next_stream_input = next_stream_input_after_cycle
-
-      if interrupted_this_cycle:
+      if should_continue_while_loop_after_this_cycle:
+        if input_for_next_graph_cycle is None:
+          print("CRITICAL ERROR: Interrupt was signaled, but no input_for_next_graph_cycle was set. Terminating.")
+          raise StopIteration("Interrupt handling logical error")
+        current_input_for_graph_stream = input_for_next_graph_cycle
+        print(f"DEBUG: Continuing WHILE loop. Next graph input will be: {str(current_input_for_graph_stream)[:100]}")
         continue
       else:
-        print("\n--- Graph Execution Fully Finished ---")
+        if ai_content_was_streamed_for_current_ai_message:
+          print()
+          ai_content_was_streamed_for_current_ai_message = False
+        print("\n--- Graph Execution Fully Finished (stream ended naturally, no further interrupts) ---")
         raise StopIteration
 
   except StopIteration:
@@ -216,6 +279,8 @@ def analyze(
     traceback.print_exc()
     raise typer.Exit(code=1)
   finally:
+    if ai_content_was_streamed_for_current_ai_message:
+      print()
     print("\n--- Analysis Complete (or Terminated) ---")
     if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
       print("Generating final report...")
@@ -225,7 +290,6 @@ def analyze(
       final_profile = final_full_state_for_report.get("profile", "Profile Not Detected")
 
       final_summary_text = "No final summary message found from AI."
-      # Ensure "messages" key exists and is a list before processing
       messages_in_final_state = final_full_state_for_report.get("messages", [])
       if isinstance(messages_in_final_state, list):
         for msg_obj in reversed(messages_in_final_state):
@@ -245,7 +309,7 @@ def analyze(
         log=final_log,
         dump_path=final_dump_path,
         initial_context=final_initial_context,
-        profile=final_profile,  # type: ignore
+        profile=final_profile,
         final_summary=final_summary_text
       )
       print(report_msg)
