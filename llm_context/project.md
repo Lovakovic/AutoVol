@@ -3,7 +3,7 @@
 **Core Objective:** To develop an LLM-powered agent (`AutoVol`) capable of assisting digital forensics analysts in performing RAM dump analysis using the Volatility 3 framework. The goal is to create a tool that is both innovative ("impressive") and practically useful, automating parts of the analysis workflow while maintaining transparency and reproducibility.
 
 **Core Concept:**
-The agent interacts with the user via a Command Line Interface (CLI). The user provides a RAM dump file and initial context (e.g., suspicion of malware, type of activity to investigate). The agent, orchestrated by LangGraph, then interacts with an LLM (Anthropic Claude 3.5 Sonnet) to:
+The agent interacts with the user via a Command Line Interface (CLI). The user provides a RAM dump file and initial context (e.g., suspicion of malware, type of activity to investigate). The agent, orchestrated by LangGraph, then interacts with an LLM (Gemini 2.5 Pro) to:
 1.  Determine the appropriate OS profile for the dump.
 2.  Based on the user's context and the results of previous commands, reason about the next logical Volatility 3 plugin to execute.
 3.  Formulate the precise Volatility 3 command (plugin name + arguments).
@@ -17,7 +17,7 @@ The agent interacts with the user via a Command Line Interface (CLI). The user p
 **Architecture & Technology Stack:**
 *   **Language:** Python 3.12
 *   **Agent Framework:** LangGraph
-*   **LLM:** Anthropic Claude 3.7 Sonnet (via `langchain-anthropic` library)
+*   **LLM:** Gemini 2.5 Pro Preview 05-06 (via `langchain-google-vertexai` library)
 *   **Volatility:** Volatility 3 (executed as a subprocess)
 *   **Interface:** CLI (using `Typer`)
 *   **State Management:** In-memory (within LangGraph state)
