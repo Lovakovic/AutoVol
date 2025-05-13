@@ -10,12 +10,13 @@ distro==1.9.0
 docstring_parser==0.16
 google-api-core==2.24.2
 google-auth==2.40.0
-google-cloud-aiplatform==1.91.0
+google-cloud-aiplatform==1.92.0
 google-cloud-bigquery==3.31.0
 google-cloud-core==2.4.3
 google-cloud-resource-manager==1.14.2
 google-cloud-storage==2.19.0
 google-crc32c==1.7.1
+google-genai==1.15.0
 google-resumable-media==2.7.2
 googleapis-common-protos==1.70.0
 greenlet==3.2.1
@@ -33,6 +34,7 @@ jsonpointer==3.0.0
 langchain==0.3.25
 langchain-anthropic==0.3.12
 langchain-core==0.3.58
+langchain-google-vertexai==2.0.23
 langchain-text-splitters==0.3.8
 langgraph==0.4.3
 langgraph-checkpoint==2.0.25
@@ -72,5 +74,6 @@ typing-inspection==0.4.0
 typing_extensions==4.13.2
 urllib3==2.4.0
 validators==0.35.0
+websockets==15.0.1
 xxhash==3.5.0
 zstandard==0.23.0

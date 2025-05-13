@@ -1,14 +1,15 @@
 import os
 from typing import List, Optional, Dict, Annotated, TypedDict, Sequence
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
-from langchain_anthropic import ChatAnthropic
+# Changed import from ChatAnthropic to ChatVertexAI
+from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Interrupt, interrupt
 
 from .volatility_runner import detect_profile, run_volatility_tool_logic, volatility_runner_tool
-from .prompts import SYSTEM_PROMPT_TEMPLATE  # IMPORT THE NEW PROMPT
+from .prompts import SYSTEM_PROMPT_TEMPLATE
 
 DETECT_PROFILE_CALL_COUNT = 0
 
@@ -22,16 +23,18 @@ class AppState(TypedDict):
   last_user_review_decision: Optional[Dict]
 
 
-llm = ChatAnthropic(
-  model="claude-3-7-sonnet-latest",
-  max_tokens=8000,
-  thinking={"type": "enabled", "budget_tokens": 4000},
+# Instantiate ChatVertexAI instead of ChatAnthropic
+llm = ChatVertexAI(
+  model="gemini-2.5-pro-preview-05-06",
+  temperature=1,
+  max_output_tokens=8000,  # Gemini models use max_output_tokens
 )
 llm_with_tool = llm.bind_tools([volatility_runner_tool])
 
 
 def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
   reasoning_parts = []
+  # This part for 'claude-messages-thinking' will likely not find anything with Gemini, which is fine.
   if hasattr(ai_message, 'response_metadata') and 'claude-messages-thinking' in ai_message.response_metadata:
     thinking_log = ai_message.response_metadata['claude-messages-thinking']
     if isinstance(thinking_log, list) and thinking_log:
@@ -44,12 +47,14 @@ def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
     elif isinstance(thinking_log, str) and thinking_log.strip():
       reasoning_parts.append("LLM Thinking Process (from metadata):\n" + thinking_log.strip())
 
+  # This part, extracting 'thinking' or 'text' from content blocks, remains relevant.
+  # Gemini might be prompted to structure its reasoning in text blocks.
   thinking_from_content_blocks = []
   text_from_content_blocks = []
   if isinstance(ai_message.content, list):
     for block in ai_message.content:
       if isinstance(block, dict):
-        if block.get("type") == "thinking" and block.get("thinking"):
+        if block.get("type") == "thinking" and block.get("thinking"):  # This type is less common for Gemini
           thinking_from_content_blocks.append(str(block["thinking"]))
         elif block.get("type") == "text" and block.get("text"):
           text_from_content_blocks.append(str(block["text"]))
@@ -58,15 +63,16 @@ def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
     reasoning_parts.append(
       "LLM Thinking (from content block):\n" + "\n".join(filter(None, thinking_from_content_blocks)))
 
+  # This will be the primary source of reasoning if the LLM follows the prompt.
   if text_from_content_blocks:
     combined_text = "\n".join(filter(None, text_from_content_blocks))
     if combined_text.strip():
       reasoning_parts.append("LLM Reasoning/Action Text:\n" + combined_text)
   elif isinstance(ai_message.content, str) and ai_message.content.strip() and not reasoning_parts:
-    reasoning_parts.append(ai_message.content)
+    reasoning_parts.append(ai_message.content)  # Fallback to raw string content
 
   if not reasoning_parts:
-    return "No detailed reasoning extracted from AI message."
+    return "No detailed reasoning extracted from AI message. Ensure the LLM provides reasoning in its textual response."
   return "\n---\n".join(reasoning_parts)
 
 
@@ -113,6 +119,7 @@ def volatility_tool_node(state: AppState) -> dict:
     dump_path=dump_path,
     profile=profile_context
   )
+  # The reasoning extraction should pick up the LLM's textual reasoning if prompted correctly.
   reasoning_for_log = _extract_reasoning_from_ai_message(ai_message_with_tool_call)
   log_entry = {
     "reasoning": reasoning_for_log,
@@ -236,7 +243,7 @@ def process_human_review_decision_node(state: AppState) -> dict:
 
   original_plugin_name = "N/A"
   original_plugin_args_list = []
-  original_tool_call_name_attr = "volatility_runner"
+  original_tool_call_name_attr = "volatility_runner"  # Default, should be tool name from tool call
   original_tool_call_id_attr = "unknown_id"
   extracted_reasoning = "Original AI reasoning not available."
   original_ai_content = [{"type": "text", "text": "Original AI message content not available."}]
@@ -261,6 +268,7 @@ def process_human_review_decision_node(state: AppState) -> dict:
 
   if action == "approve":
     print("User approved tool call.")
+    # No change to AI message needed if approved, it will proceed to tool node
     log_updates.append({
       "reasoning": f"User approved proposed command.\nOriginal AI Reasoning:\n{extracted_reasoning}",
       "command": f"{original_plugin_name} {' '.join(original_plugin_args_list)}",
@@ -274,17 +282,20 @@ def process_human_review_decision_node(state: AppState) -> dict:
       err_msg = "Error: Modification chosen, but no valid modified_tool_args (with plugin_name) provided."
       print(err_msg)
       message_updates_to_add.append(HumanMessage(content=err_msg))
-    elif not original_ai_message_id:
+    elif not original_ai_message_id:  # Check if we have an original AI message to modify
       err_msg = "Error: Modification chosen, but original AI message to modify was not found."
       print(err_msg)
       message_updates_to_add.append(HumanMessage(content=err_msg))
     else:
       modified_plugin_name_val = modified_tool_args.get('plugin_name')
       modified_plugin_args_list = modified_tool_args.get('plugin_args') or []
+      # Create a new AIMessage with the modified tool call, preserving other attributes
       new_tool_call_structure = {"name": original_tool_call_name_attr, "args": modified_tool_args,
                                  "id": original_tool_call_id_attr}
       modified_ai_message = AIMessage(content=original_ai_content, tool_calls=[new_tool_call_structure],
                                       id=original_ai_message_id, response_metadata=original_ai_response_metadata)
+      # Replace the last AI message with this modified one (or add it if more robust handling is needed)
+      # For simplicity, we add; the graph's routing will pick up the latest AIMessage with tool_calls.
       message_updates_to_add.append(modified_ai_message)
       log_updates.append({
         "reasoning": f"User modified command.\nOriginal AI Reasoning:\n{extracted_reasoning}",
@@ -296,16 +307,18 @@ def process_human_review_decision_node(state: AppState) -> dict:
   elif action == "deny":
     print("User denied tool call.")
     denial_reason = user_decision.get("reason", "No reason provided.")
-    if not original_ai_message_id:
+    if not original_ai_message_id:  # Check if we have an original AI message
       err_msg = "Error: Deny action chosen, but original AI message to modify was not found."
       print(err_msg)
       message_updates_to_add.append(HumanMessage(content=err_msg))
     else:
+      # Create a new AIMessage without the tool call, preserving content and ID
       ai_message_without_tool_call = AIMessage(content=original_ai_content, tool_calls=[], id=original_ai_message_id,
                                                response_metadata=original_ai_response_metadata)
       message_updates_to_add.append(ai_message_without_tool_call)
+      # Add a HumanMessage with feedback for the LLM
       feedback_to_llm = HumanMessage(
-        content=f"User feedback: The proposed tool call ({original_plugin_name}) was denied. Reason: {denial_reason}. Please reconsider your next step.")
+        content=f"User feedback: The proposed tool call ({original_plugin_name}) was denied. Reason: {denial_reason}. Please reconsider your next step based on this feedback and the existing context.")
       message_updates_to_add.append(feedback_to_llm)
       log_updates.append({
         "reasoning": f"User denied command. Reason: {denial_reason}\nOriginal AI Reasoning:\n{extracted_reasoning}",
@@ -316,22 +329,27 @@ def process_human_review_decision_node(state: AppState) -> dict:
   elif action == "internal_error_at_review":
     err_reason = user_decision.get("reason", "Unknown internal error during review step initiation.")
     print(f"Internal error flagged during review step: {err_reason}")
+    # Add a human message to inform the agent of the system error
     message_updates_to_add.append(HumanMessage(
       content=f"System: Internal error occurred before human review could properly start: {err_reason}. Agent needs to reassess."))
     log_updates.append(
       {"reasoning": "Internal error in human review step initiation.", "command": "N/A (Internal Error)",
        "output": err_reason})
 
-  else:
+  else:  # Fallback for any unhandled action
     err_msg = f"Error: Invalid or unhandled action '{action}' in user decision. Decision data: {user_decision}"
     print(err_msg)
-    message_updates_to_add.append(HumanMessage(content=err_msg))
+    message_updates_to_add.append(HumanMessage(content=err_msg))  # Inform LLM
 
-  return {
-    "messages": message_updates_to_add,
+  # If messages were added, state.messages will be updated by add_messages reducer
+  return_dict = {
     "investigation_log": current_log + log_updates if log_updates else current_log,
-    "last_user_review_decision": None
+    "last_user_review_decision": None  # Clear the decision
   }
+  if message_updates_to_add:
+    return_dict["messages"] = message_updates_to_add
+
+  return return_dict
 
 
 graph_builder = StateGraph(AppState)
@@ -367,33 +385,48 @@ graph_builder.add_edge("human_tool_review_interrupt", "process_review_decision")
 def route_after_processing_review(state: AppState) -> str:
   latest_ai_message_with_potential_tool_call = None
   human_feedback_present_for_denial = False
-  internal_error_message_present = False  # New flag
+  internal_error_message_present = False
 
+  # Iterate from most recent messages to find the relevant signals
   for msg in reversed(state.get("messages", [])):
     if isinstance(msg, AIMessage):
-      latest_ai_message_with_potential_tool_call = msg
-      # We break after finding the latest AIMessage because that's primary for tool call check
-      break
-    if isinstance(msg, HumanMessage):  # Check all human messages for relevant content
+      # Found the latest AI message, this is key for checking for tool calls.
+      # If it has tool calls, it means 'approve' or 'modify' happened and we should execute.
+      # If it doesn't have tool calls, it could be due to 'deny' (where we replaced it) or other reasons.
+      if latest_ai_message_with_potential_tool_call is None:  # only take the most recent AI message
+        latest_ai_message_with_potential_tool_call = msg
+
+    if isinstance(msg, HumanMessage):
       if "User feedback: The proposed tool call" in msg.content and "was denied" in msg.content:
         human_feedback_present_for_denial = True
-      # Check for the specific internal error message from process_human_review_decision_node
-      if "System: Internal error occurred" in msg.content:
+      if "System: Internal error occurred" in msg.content:  # Check for our specific system error message
         internal_error_message_present = True
 
+    # Optimization: if we found an AI message and a denial/error feedback, we might have enough info.
+    # However, the logic is safer to scan relevant parts of recent history.
+
   if latest_ai_message_with_potential_tool_call and latest_ai_message_with_potential_tool_call.tool_calls:
+    # This implies an 'approve' or 'modify' action resulted in an AIMessage with tool_calls.
     print(
       "Routing after processing review: AIMessage has tool calls (approved/modified), going to volatility_tool_node.")
     return "volatility_tool_node"
-  elif human_feedback_present_for_denial or \
-    internal_error_message_present or \
-    (latest_ai_message_with_potential_tool_call and not latest_ai_message_with_potential_tool_call.tool_calls):
+  elif human_feedback_present_for_denial or internal_error_message_present:
+    # A 'deny' action or an internal error explicitly directs back to the agent for reconsideration.
     print(
-      "Routing after processing review: No tool calls in AIMessage, or human denial/internal error feedback present, going back to agent.")
+      "Routing after processing review: Denial feedback or internal error feedback present, going back to agent.")
+    return "agent"
+  elif latest_ai_message_with_potential_tool_call and not latest_ai_message_with_potential_tool_call.tool_calls:
+    # This could be an AI message that was stripped of its tool calls due to denial,
+    # or an AI message that legitimately has no tool calls.
+    # If no explicit denial/error feedback, but the AI message has no tool calls,
+    # it's safer to loop back to the agent to decide the next step (e.g., finish or try something else).
+    print(
+      "Routing after processing review: Latest AIMessage has no tool calls (and no explicit denial/error feedback), going back to agent.")
     return "agent"
   else:
+    # Fallback: if state is unclear (e.g. no recent AI message found after processing review, which is unlikely)
     print(
-      "Warning: Unexpected state after processing review or non-denial/non-error human message. Defaulting to agent.")
+      "Warning: Unexpected state after processing review. Defaulting to agent.")
     return "agent"
 
 

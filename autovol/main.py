@@ -1,14 +1,35 @@
 import os
 import uuid
 from typing import Optional
+from pathlib import Path  # Added import
 
 import typer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.types import Interrupt, Command
 
+# Load .env before other project imports that might need env vars
 load_dotenv()
-from .agent import app_graph, AppState
+
+# Attempt to set GOOGLE_APPLICATION_CREDENTIALS from a local key file
+# This should be done early, before 'app_graph' from '.agent' is imported if it initializes the LLM globally
+VERTEX_KEY_FILENAME = "vertex_key.json"
+# Assuming main.py is in autovol/, so project_root is one level up.
+# If your script is run from project root, and main.py is in autovol/, this path is correct.
+# If main.py is at project root, then project_root = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VERTEX_KEY_PATH = PROJECT_ROOT / VERTEX_KEY_FILENAME
+
+if VERTEX_KEY_PATH.exists():
+  os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(VERTEX_KEY_PATH)
+  print(f"INFO: Set GOOGLE_APPLICATION_CREDENTIALS to: {VERTEX_KEY_PATH}")
+elif not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+  # Only print warning if it's not set by other means (e.g. user's global env)
+  print(
+    f"Warning: '{VERTEX_KEY_FILENAME}' not found at '{PROJECT_ROOT}' and GOOGLE_APPLICATION_CREDENTIALS is not otherwise set.")
+  print("         The application will likely fail to authenticate with Google Cloud Vertex AI.")
+
+from .agent import app_graph, AppState  # Now import agent stuff
 from .reporting import generate_report
 
 app = typer.Typer()
@@ -29,8 +50,12 @@ def analyze(
   if not os.getenv("VOLATILITY3_PATH"):
     print("\nError: VOLATILITY3_PATH environment variable is not set.")
     raise typer.Exit(code=1)
-  if not os.getenv("ANTHROPIC_API_KEY"):
-    print("\nError: ANTHROPIC_API_KEY environment variable is not set.")
+
+  # Updated environment variable check
+  if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    print("\nError: GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.")
+    print(f"       Please ensure it points to your Google Cloud service account JSON key file,")
+    print(f"       or place '{VERTEX_KEY_FILENAME}' in the project root directory ('{PROJECT_ROOT}').")
     raise typer.Exit(code=1)
 
   initial_state_dict: AppState = {
@@ -39,7 +64,7 @@ def analyze(
     "initial_context": context,
     "profile": None,
     "investigation_log": [],
-    "last_user_review_decision": None  # Initialize the new state field
+    "last_user_review_decision": None
   }
 
   thread_id = str(uuid.uuid4())
@@ -47,15 +72,16 @@ def analyze(
 
   next_stream_input = initial_state_dict
   num_messages_printed_for_cli = len(initial_state_dict.get("messages", []))
-  final_full_state_for_report: Optional[AppState] = initial_state_dict  # Initialize with initial state
+  final_full_state_for_report: Optional[AppState] = initial_state_dict
 
   try:
     while True:
       print(f"\n--- Graph Cycle (Input type: {type(next_stream_input)}) ---")
-      if isinstance(next_stream_input, Command):  # For logging resume attempts
+      if isinstance(next_stream_input, Command):
         print(f"Resuming with Command object.")
 
-      async_gen = app_graph.stream(
+      # Make sure app_graph is defined before this loop; it is via import.
+      async_gen = app_graph.stream(  # type: ignore
         next_stream_input,
         config=config_for_stream,
         stream_mode="updates"
@@ -71,11 +97,9 @@ def analyze(
           print(f"Warning: Stream yielded non-dict chunk: {chunk}")
           continue
 
-        # Always update final_full_state_for_report with the latest state after any node runs or before interrupt
-        # This ensures we have the most recent state possible for reporting.
-        current_graph_state_candidate = app_graph.get_state(config_for_stream)
-        if current_graph_state_candidate:  # Ensure get_state returned something
-          final_full_state_for_report = current_graph_state_candidate
+        current_graph_state_candidate = app_graph.get_state(config_for_stream)  # type: ignore
+        if current_graph_state_candidate:
+          final_full_state_for_report = current_graph_state_candidate.values  # type: ignore
 
         if "__interrupt__" in chunk:
           interrupted_this_cycle = True
@@ -94,15 +118,14 @@ def analyze(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt payload type from graph"})
             break
 
-          interrupt_payload_from_graph = interrupt_object.value  # This is what human_tool_review_node sent
+          interrupt_payload_from_graph = interrupt_object.value
 
           print("\n--- Human Input Required ---")
           reasoning_display = interrupt_payload_from_graph.get("reasoning_and_thinking", "No reasoning provided.")
           tool_args_to_review = interrupt_payload_from_graph.get("tool_call_args", {})
 
-          if interrupt_payload_from_graph.get("error_condition"):  # Custom flag from human_tool_review_node
+          if interrupt_payload_from_graph.get("error_condition"):
             print(f"Error condition from review node: {reasoning_display}")
-            # Decide how to proceed, e.g., force a denial or specific error action
             user_decision_payload = {"action": "internal_error_at_review", "reason": reasoning_display}
           else:
             print(f"\nLLM Reasoning & Thinking:\n{reasoning_display}\n")
@@ -117,7 +140,7 @@ def analyze(
                 break
               typer.echo("Invalid choice. Please enter 'a', 'm', or 'd'.", err=True)
 
-            user_decision_payload = {}  # This is what process_human_review_decision_node will receive
+            user_decision_payload = {}
             if action_choice == 'a':
               user_decision_payload = {"action": "approve"}
             elif action_choice == 'd':
@@ -137,19 +160,19 @@ def analyze(
                   "plugin_args": modified_plugin_args
                 }
               }
-
-          next_stream_input_after_cycle = Command(resume=user_decision_payload)
+          next_stream_input_after_cycle = Command(resume=user_decision_payload)  # type: ignore
           break
-
-        else:  # Regular update chunk (not an interrupt)
+        else:
           if not chunk:
             print("Stream yielded an empty update chunk.")
             continue
 
           node_name_that_ran = list(chunk.keys())[0]
-          # final_full_state_for_report was already updated at the start of the chunk processing
 
-          if final_full_state_for_report and "messages" in final_full_state_for_report:
+          # final_full_state_for_report was updated via get_state() at the start of chunk processing
+          # Ensure final_full_state_for_report is a dict before accessing "messages"
+          if final_full_state_for_report and isinstance(final_full_state_for_report,
+                                                        dict) and "messages" in final_full_state_for_report:
             all_messages_now = final_full_state_for_report["messages"]
             new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
 
@@ -169,7 +192,7 @@ def analyze(
                     print(f"Tool Call Proposed by AI: {msg.tool_calls}")
                 elif isinstance(msg, ToolMessage):
                   tool_output_summary = msg.content
-                  if len(tool_output_summary) > 300:  # Simple truncation for CLI
+                  if len(tool_output_summary) > 300:
                     tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
                   print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_summary}")
                 elif isinstance(msg, HumanMessage):
@@ -179,12 +202,9 @@ def analyze(
       next_stream_input = next_stream_input_after_cycle
 
       if interrupted_this_cycle:
-        # final_full_state_for_report was updated before breaking
         continue
       else:
-        # Stream finished without an interrupt this cycle (next_stream_input is None)
         print("\n--- Graph Execution Fully Finished ---")
-        # final_full_state_for_report was updated by the last processed chunk
         raise StopIteration
 
   except StopIteration:
@@ -194,22 +214,21 @@ def analyze(
     print(f"{type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-    # final_full_state_for_report should have the state right before the error.
     raise typer.Exit(code=1)
   finally:
     print("\n--- Analysis Complete (or Terminated) ---")
-    # final_full_state_for_report should hold the last known good state or initial state.
     if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
       print("Generating final report...")
       final_log = final_full_state_for_report.get("investigation_log", [])
-      # Ensure all args for generate_report are correctly fetched or defaulted
-      final_dump_path = final_full_state_for_report.get("dump_path", dump_path)  # fallback to initial if not in state
+      final_dump_path = final_full_state_for_report.get("dump_path", dump_path)
       final_initial_context = final_full_state_for_report.get("initial_context", context)
       final_profile = final_full_state_for_report.get("profile", "Profile Not Detected")
 
       final_summary_text = "No final summary message found from AI."
-      if final_full_state_for_report.get("messages"):
-        for msg_obj in reversed(final_full_state_for_report.get("messages", [])):
+      # Ensure "messages" key exists and is a list before processing
+      messages_in_final_state = final_full_state_for_report.get("messages", [])
+      if isinstance(messages_in_final_state, list):
+        for msg_obj in reversed(messages_in_final_state):
           if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:
             if isinstance(msg_obj.content, str):
               final_summary_text = msg_obj.content
@@ -226,7 +245,7 @@ def analyze(
         log=final_log,
         dump_path=final_dump_path,
         initial_context=final_initial_context,
-        profile=final_profile,
+        profile=final_profile,  # type: ignore
         final_summary=final_summary_text
       )
       print(report_msg)
