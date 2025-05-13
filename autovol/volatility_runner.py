@@ -17,6 +17,78 @@ def _get_volatility_path() -> str:
   return VOLATILITY_PATH
 
 
+def list_all_available_plugins(volatility_path: Optional[str] = None) -> List[str]:
+  """
+  Lists all available Volatility 3 plugins by running 'vol.py -h'.
+  Returns a list of plugin names or an empty list on error.
+  """
+  vol_path = volatility_path or _get_volatility_path()
+  command = [PYTHON_EXECUTABLE, vol_path, "-h"]
+
+  plugin_names = []
+  try:
+    print(f"\nListing all Volatility plugins with: {' '.join(command)}")
+    result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
+
+    # Regex to capture plugin names indented by 4 spaces.
+    # It captures the plugin name (e.g., "linux.bash.Bash")
+    # It optionally matches (but doesn't capture) the rest of the line (description)
+    plugin_line_regex = re.compile(r"^\s{4}([a-zA-Z0-9_.]+)(?:\s{2,}.*)?$")
+
+    in_plugins_section = False
+    past_plugin_header_line = False  # To skip the "  PLUGIN" line itself
+
+    for line in result.stdout.splitlines():
+      stripped_line = line.strip()
+
+      if not in_plugins_section:
+        if stripped_line == "Plugins:":
+          in_plugins_section = True
+        continue
+
+        # We are in the "Plugins:" section
+
+      # The line "  PLUGIN" acts as a sub-header before the actual list.
+      # We need to pass this line.
+      if not past_plugin_header_line:
+        if line.startswith("  PLUGIN"):  # Check for the exact "  PLUGIN" line
+          past_plugin_header_line = True
+        continue  # Skip "For plugin specific options...", blank lines, and "  PLUGIN" itself
+
+      # Now we are past the "  PLUGIN" header.
+      # Look for actual plugin entries or the end-of-list marker.
+
+      # Check for the end of the relevant plugin list
+      if stripped_line.startswith("The following plugins could not be loaded"):
+        break
+
+      # Match plugin lines (indented by 4 spaces)
+      match = plugin_line_regex.match(line)  # Match against the original line
+      if match:
+        plugin_names.append(match.group(1))
+
+    if not plugin_names:
+      print(
+        "Warning: No plugins extracted from 'vol.py -h' output. Regex or Volatility output format might have issues, or the plugin list is empty.")
+    else:
+      print(f"Successfully extracted {len(plugin_names)} plugin names from 'vol.py -h'. First few: {plugin_names[:5]}")
+
+  except subprocess.CalledProcessError as e:
+    print(f"Error running 'vol.py -h' (Code: {e.returncode}). Stderr: {e.stderr[:500]}...")  # Show some stderr
+    return []
+  except subprocess.TimeoutExpired:
+    print(f"Error: 'vol.py -h' command timed out after 120 seconds.")
+    return []
+  except FileNotFoundError:
+    print(f"Error: '{PYTHON_EXECUTABLE}' or '{vol_path}' not found for listing plugins.")
+    return []
+  except Exception as e:
+    print(f"An unexpected error occurred while listing plugins: {e}")
+    return []
+
+  return sorted(list(set(plugin_names)))  # Deduplicate and sort
+
+
 def execute_volatility_plugin(
   dump_path: str,
   profile: str,  # Still passed for potential context, but not used in command

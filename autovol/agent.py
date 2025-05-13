@@ -8,7 +8,8 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Interrupt, interrupt
 
-from .volatility_runner import detect_profile, run_volatility_tool_logic, volatility_runner_tool
+from .volatility_runner import detect_profile, run_volatility_tool_logic, volatility_runner_tool, \
+  list_all_available_plugins
 from .prompts import SYSTEM_PROMPT_TEMPLATE
 
 DETECT_PROFILE_CALL_COUNT = 0
@@ -19,6 +20,7 @@ class AppState(TypedDict):
   dump_path: str
   initial_context: str
   profile: Optional[str]
+  available_plugins: Optional[List[str]]  # New field
   investigation_log: List[Dict[str, str]]
   last_user_review_decision: Optional[Dict]
 
@@ -147,9 +149,51 @@ def detect_profile_node(state: AppState) -> dict:
   return {"profile": profile}
 
 
+def list_plugins_node(state: AppState) -> dict:
+  print("--- Listing Available Volatility Plugins ---")
+  profile = state.get("profile")
+  # This node should only be called if profile is not None, based on graph logic.
+  # However, as a safeguard:
+  if not profile:
+    print("Critical Error: list_plugins_node called but profile is None. This should not happen.")
+    return {"available_plugins": None}
+
+  all_plugins = list_all_available_plugins()
+
+  if not all_plugins:
+    print("Failed to retrieve any plugins from 'vol.py -h'.")
+    return {"available_plugins": None}
+
+  profile_prefix = profile + "."
+  relevant_plugins = []
+  # Define prefixes for other major OSes to exclude their specific plugins
+  # if the current profile is different.
+  other_os_prefixes = [p + "." for p in ["windows", "linux", "mac"] if p != profile]
+
+  for p_name in all_plugins:
+    is_for_current_profile = p_name.startswith(profile_prefix)
+    is_for_other_os = any(p_name.startswith(op) for op in other_os_prefixes)
+
+    if is_for_current_profile:
+      relevant_plugins.append(p_name)
+    elif not is_for_other_os:  # It's not for the current profile, and not for another known OS profile
+      relevant_plugins.append(p_name)  # Assumed to be a general plugin
+
+  relevant_plugins = sorted(list(set(relevant_plugins)))  # Deduplicate and sort
+
+  if not relevant_plugins:
+    print(
+      f"No plugins found specifically matching profile '{profile}' or general plugins from the master list. This might indicate an issue.")
+    return {"available_plugins": None}  # Or [] if preferred to signify "checked but none found"
+
+  print(f"Found {len(relevant_plugins)} relevant plugins for profile '{profile}'. First few: {relevant_plugins[:5]}")
+  return {"available_plugins": relevant_plugins}
+
+
 def agent_node(state: AppState) -> dict:
   print("--- Calling LLM Agent ---")
   profile = state.get("profile")
+  available_plugins_list = state.get("available_plugins")
 
   if not profile:
     return {"messages": [AIMessage(
@@ -167,11 +211,30 @@ def agent_node(state: AppState) -> dict:
     log_summary_parts.append(f"- Command: {cmd}\n  Output Preview: {output_preview}")
   investigation_log_summary_str = "\n".join(log_summary_parts) if log_summary_parts else "No commands run yet."
 
+  # Format available_plugins for the prompt
+  available_plugins_str = "Could not be determined. Proceed with caution using common plugins for the '{profile}' OS base."
+  if available_plugins_list:  # If list is not None and not empty
+    # Truncate if too long for the prompt, but still give an idea
+    if len(available_plugins_list) > 40:  # Adjusted limit
+      # Show a few examples from different categories if possible (OS-specific, general)
+      os_specific_examples = [p for p in available_plugins_list if p.startswith(profile + ".")][:2]
+      general_examples = [p for p in available_plugins_list if
+                          not any(p.startswith(os_base + ".") for os_base in ["windows.", "linux.", "mac."])][:2]
+      examples = sorted(list(set(os_specific_examples + general_examples)))
+      example_str = f" (e.g., {', '.join(examples)}, ... and others)" if examples else ""
+      available_plugins_str = (f"A list of {len(available_plugins_list)} plugins is available{example_str}. "
+                               f"The full list is too long to display here. Focus on plugins starting with '{profile}.' or general purpose ones.")
+    else:
+      available_plugins_str = "\n- " + "\n- ".join(available_plugins_list)
+  elif available_plugins_list == []:  # Explicitly empty list after filtering
+    available_plugins_str = "No specific plugins were found for the detected profile or general context after filtering. Please use well-known standard plugins for '{profile}' OS base with caution."
+
   system_prompt_content = SYSTEM_PROMPT_TEMPLATE.format(
     dump_path=state['dump_path'],
     profile=profile,
     initial_context=state['initial_context'],
-    investigation_log_summary=investigation_log_summary_str
+    investigation_log_summary=investigation_log_summary_str,
+    available_plugins_list_str=available_plugins_str  # New parameter
   )
 
   messages_for_llm = [SystemMessage(content=system_prompt_content)]
@@ -179,11 +242,6 @@ def agent_node(state: AppState) -> dict:
 
   response = llm_with_tool.invoke(messages_for_llm)
 
-  # REMOVED print statements for LLM Full Response Content and Tool Calls
-  # main.py will handle displaying this information via streaming.
-
-  # if response.tool_calls: # This print is also redundant due to main.py
-  #   print(f"LLM Tool Calls: {response.tool_calls}")
   return {"messages": [response]}
 
 
@@ -341,13 +399,37 @@ def process_human_review_decision_node(state: AppState) -> dict:
 
 graph_builder = StateGraph(AppState)
 graph_builder.add_node("detect_profile", detect_profile_node)
+graph_builder.add_node("list_plugins", list_plugins_node)  # Added node
 graph_builder.add_node("agent", agent_node)
 graph_builder.add_node("human_tool_review_interrupt", human_tool_review_node)
 graph_builder.add_node("process_review_decision", process_human_review_decision_node)
 graph_builder.add_node("volatility_tool_node", volatility_tool_node)
 
 graph_builder.add_edge(START, "detect_profile")
-graph_builder.add_conditional_edges("detect_profile", lambda s: "agent", {"agent": "agent"})
+
+
+# Conditional routing after profile detection
+def route_after_profile_detection(state: AppState) -> str:
+  if state.get("profile"):
+    print("Routing after profile detection: Profile found, proceeding to list_plugins.")
+    return "list_plugins"
+  else:
+    # If profile detection failed, agent_node will generate an error message,
+    # and then route_after_agent will lead to END.
+    print("Routing after profile detection: Profile NOT found, proceeding to agent node to report failure.")
+    return "agent"
+
+
+graph_builder.add_conditional_edges(
+  "detect_profile",
+  route_after_profile_detection,
+  {
+    "list_plugins": "list_plugins",
+    "agent": "agent"
+  }
+)
+
+graph_builder.add_edge("list_plugins", "agent")  # New edge from list_plugins to agent
 
 
 def route_after_agent(state: AppState) -> str:

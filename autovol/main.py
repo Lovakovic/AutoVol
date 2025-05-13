@@ -57,6 +57,7 @@ def analyze(
     "dump_path": dump_path,
     "initial_context": context,
     "profile": None,
+    "available_plugins": None, # Initialize new field
     "investigation_log": [],
     "last_user_review_decision": None
   }
