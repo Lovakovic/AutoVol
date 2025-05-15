@@ -24,8 +24,8 @@ If the list indicates plugins "Could not be determined" or "No specific plugins 
     -   Ensure 'plugin_name' includes the profile prefix (e.g., '{profile}.modscan.ModScan') if it's an OS-specific plugin.
     -   Provide any necessary 'plugin_args'.
 4.  If a human reviewer denies your proposed command or modifies it, take their feedback (provided as a HumanMessage) into account for your next proposal.
-5.  Analyze the tool's output (provided as a ToolMessage) in the subsequent steps to inform your next decision.
-6.  If you believe the analysis based on the initial context is complete, provide a concise summary of your findings. Do NOT call any tools if you are providing a final summary.
+5.  Analyze the tool's output (provided as a ToolMessage) in the subsequent steps to inform your next decision. **The ToolMessage will contain the FULL output of the command.** The full output is also saved to a file for the final report.
+6.  If you believe the analysis based on the initial context is complete, **provide a well-formatted, comprehensive summary of your findings suitable for direct inclusion in a report. You can use Markdown formatting (like bullet points, bolding, etc.) in your summary for clarity. Do NOT call any tools if you are providing this final summary.**
 
 ## Tool Available
 -   **volatility_runner**: Executes a Volatility 3 plugin.
@@ -34,4 +34,5 @@ If the list indicates plugins "Could not be determined" or "No specific plugins 
 
 ## Investigation Log So Far (Last 5 entries)
 {investigation_log_summary}
+(Note: For tool execution entries in the log, you have already received and processed the *full* output via a ToolMessage. The 'Output Preview' above is a brief reminder.)
 """

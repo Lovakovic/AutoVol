@@ -2,16 +2,15 @@ import os
 import uuid
 from typing import Optional, cast, Any
 from pathlib import Path
+from datetime import datetime
 
 import typer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
 from langgraph.types import Interrupt, Command
 
-# Load .env before other project imports that might need env vars
 load_dotenv()
 
-# Attempt to set GOOGLE_APPLICATION_CREDENTIALS from a local key file
 VERTEX_KEY_FILENAME = "vertex_key.json"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VERTEX_KEY_PATH = PROJECT_ROOT / VERTEX_KEY_FILENAME
@@ -45,21 +44,26 @@ def analyze(
   if not os.getenv("VOLATILITY3_PATH"):
     print("\nError: VOLATILITY3_PATH environment variable is not set.")
     raise typer.Exit(code=1)
-
   if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     print("\nError: GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.")
     print(f"       Please ensure it points to your Google Cloud service account JSON key file,")
     print(f"       or place '{VERTEX_KEY_FILENAME}' in the project root directory ('{PROJECT_ROOT}').")
     raise typer.Exit(code=1)
 
+  timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+  safe_dump_stem = "".join(c if c.isalnum() else '_' for c in Path(dump_path).stem)
+  report_session_id = f"autovol_report_{safe_dump_stem}_{timestamp_str}"
+
+
   initial_state_dict: AppState = {
     "messages": [HumanMessage(content=context)],
     "dump_path": dump_path,
     "initial_context": context,
     "profile": None,
-    "available_plugins": None, # Initialize new field
+    "available_plugins": None,
     "investigation_log": [],
-    "last_user_review_decision": None
+    "last_user_review_decision": None,
+    "report_session_id": report_session_id
   }
 
   thread_id = str(uuid.uuid4())
@@ -79,6 +83,7 @@ def analyze(
 
       should_continue_while_loop_after_this_cycle = False
       input_for_next_graph_cycle = None
+      Path("reports").mkdir(exist_ok=True)
 
       async_gen = app_graph.stream(
         current_input_for_graph_stream,
@@ -107,7 +112,6 @@ def analyze(
 
         if is_interrupt_chunk:
           should_continue_while_loop_after_this_cycle = True
-
           if ai_content_was_streamed_for_current_ai_message:
             print()
             ai_content_was_streamed_for_current_ai_message = False
@@ -119,15 +123,12 @@ def analyze(
               resume={"action": "internal_error_at_review", "reason": "Internal error processing interrupt structure."}
             )
             break
-
           interrupt_tuple_from_graph = interrupt_data_payload
-
           if not isinstance(interrupt_tuple_from_graph, tuple) or not interrupt_tuple_from_graph:
             print("Error: __interrupt__ value is not a valid tuple.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
             break
-
           interrupt_object = interrupt_tuple_from_graph[0]
           if not isinstance(interrupt_object, Interrupt):
             print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
@@ -136,18 +137,10 @@ def analyze(
             break
 
           interrupt_payload_from_graph_value = interrupt_object.value
-          # MODIFIED: Changed section header
           print("\n\n--- Agent Proposes Command: Human Input Required ---")
-
-          # REMOVED: Redundant reasoning print, as it was just streamed.
-          # reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking", "No reasoning provided.")
-          # print(f"\nLLM Reasoning for this proposal:\n{reasoning_display}\n") # REMOVED
-
           tool_args_to_review = interrupt_payload_from_graph_value.get("tool_call_args", {})
-
           user_decision_payload = {}
           if interrupt_payload_from_graph_value.get("error_condition"):
-            # If there's an error condition, we might want to display the reasoning/error.
             error_reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking",
                                                                              "Error: No specific reason provided for error condition.")
             print(f"Error condition from review node: {error_reasoning_display}")
@@ -155,17 +148,14 @@ def analyze(
           else:
             plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
             plugin_args = tool_args_to_review.get('plugin_args', [])
-            # Add a newline before the proposed command for clarity
             print()
             typer.echo(f"Proposed command: ", nl=False)
             typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
-
             while True:
               action_choice = typer.prompt("Approve (a), Modify (m), or Deny (d) the command?").lower()
               if action_choice in ['a', 'm', 'd']:
                 break
               typer.echo("Invalid choice. Please enter 'a', 'm', or 'd'.", err=True)
-
             if action_choice == 'a':
               user_decision_payload = {"action": "approve"}
             elif action_choice == 'd':
@@ -187,10 +177,8 @@ def analyze(
               }
           input_for_next_graph_cycle = Command(resume=user_decision_payload)
           break
-
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name, chunk_data = raw_chunk_from_graph
-
           if stream_mode_name == "messages":
             message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
             if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
@@ -199,17 +187,13 @@ def analyze(
                 id_of_ai_message_content_streamed = message_chunk.id
               print(message_chunk.content, end="", flush=True)
               ai_content_was_streamed_for_current_ai_message = True
-
           elif stream_mode_name == "updates":
             if not chunk_data:
               continue
-
             node_name_that_ran = list(chunk_data.keys())[0]
-
             if final_full_state_for_report and "messages" in final_full_state_for_report:
               all_messages_now = final_full_state_for_report["messages"]
               new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
-
               if new_messages_to_print:
                 if ai_content_was_streamed_for_current_ai_message and \
                   node_name_that_ran == "agent" and \
@@ -217,14 +201,12 @@ def analyze(
                   isinstance(new_messages_to_print[0], AIMessage) and \
                   new_messages_to_print[0].id == id_of_ai_message_content_streamed:
                   print()
-
                 for msg_idx, msg in enumerate(new_messages_to_print):
                   if isinstance(msg, AIMessage):
                     content_already_streamed_for_this_msg = (
                       ai_content_was_streamed_for_current_ai_message and
                       msg.id == id_of_ai_message_content_streamed
                     )
-
                     if content_already_streamed_for_this_msg:
                       ai_content_was_streamed_for_current_ai_message = False
                       id_of_ai_message_content_streamed = None
@@ -238,7 +220,6 @@ def analyze(
                         ai_content_print = msg.content
                       if ai_content_print.strip():
                         print(f"AI: {ai_content_print.strip()}")
-
                     if msg.tool_calls:
                       tool_call_summary_parts = []
                       for tc in msg.tool_calls:
@@ -246,19 +227,19 @@ def analyze(
                         tc_plugin_args_list = tc['args'].get('plugin_args', [])
                         tc_plugin_args_str = ' '.join(tc_plugin_args_list) if tc_plugin_args_list else ""
                         tool_call_summary_parts.append(f"{tc_plugin} {tc_plugin_args_str}".strip())
-                      # Added newline before tool call proposal if content wasn't streamed or if it was but content was empty.
-                      # If content was streamed, a newline should already be there.
                       if not content_already_streamed_for_this_msg or not msg.content:
                         print()
                       print(f"Tool Call Proposed: {', '.join(tool_call_summary_parts)}")
-                      print()  # Add a newline after the tool call proposal
-
+                      print()
                   elif isinstance(msg, ToolMessage):
                     print()
-                    tool_output_summary = msg.content
-                    if len(tool_output_summary) > 300:
-                      tool_output_summary = tool_output_summary[:300] + "...\n(Full output in report)"
-                    print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_summary}")
+                    # ToolMessage.content is now the FULL output.
+                    # For CLI display, we might still want to truncate it here.
+                    # The agent gets the full output, which is key.
+                    tool_output_for_cli = msg.content
+                    if len(tool_output_for_cli) > 500: # Truncate for CLI only
+                      tool_output_for_cli = tool_output_for_cli[:500] + "...\n(Full output processed by agent and saved to report)"
+                    print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_for_cli}")
                     print()
                   elif isinstance(msg, HumanMessage):
                     if num_messages_printed_for_cli > 0 or msg is not all_messages_now[0]:
@@ -282,7 +263,6 @@ def analyze(
           id_of_ai_message_content_streamed = None
         print("\n--- Analysis Concluded by Agent ---")
         raise StopIteration
-
   except StopIteration:
     print("Agent interaction cycle completed.")
   except Exception as e:
@@ -301,6 +281,8 @@ def analyze(
       final_dump_path = final_full_state_for_report.get("dump_path", dump_path)
       final_initial_context = final_full_state_for_report.get("initial_context", context)
       final_profile = final_full_state_for_report.get("profile", "Profile Not Detected")
+      session_id_for_report = final_full_state_for_report.get("report_session_id", report_session_id)
+
 
       final_summary_text = "No final summary message found from AI."
       messages_in_final_state = final_full_state_for_report.get("messages", [])
@@ -314,7 +296,6 @@ def analyze(
               for _content_block in msg_obj.content:
                 if isinstance(_content_block, dict) and _content_block.get("type") == "text":
                   current_msg_text_parts.append(_content_block.get("text", ""))
-
             assembled_text = "".join(current_msg_text_parts).strip()
             if assembled_text:
               final_summary_text = assembled_text
@@ -325,7 +306,8 @@ def analyze(
         dump_path=final_dump_path,
         initial_context=final_initial_context,
         profile=str(final_profile),
-        final_summary=final_summary_text
+        final_summary=final_summary_text,
+        report_session_id=session_id_for_report
       )
       print(report_msg)
     else:
@@ -334,7 +316,6 @@ def analyze(
         print("Reason: final_full_state_for_report was None.")
       elif not isinstance(final_full_state_for_report, dict):
         print(f"Reason: final_full_state_for_report was not a dictionary, type: {type(final_full_state_for_report)}")
-
 
 if __name__ == "__main__":
   app()
