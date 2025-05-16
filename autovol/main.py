@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import Optional, cast, Any
+from typing import Optional, cast, Any, List
 from pathlib import Path
 from datetime import datetime
 
@@ -23,20 +23,45 @@ elif not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     f"Warning: '{VERTEX_KEY_FILENAME}' not found at '{PROJECT_ROOT}' and GOOGLE_APPLICATION_CREDENTIALS is not otherwise set.")
   print("         The application will likely fail to authenticate with Google Cloud Vertex AI.")
 
-from .agent import app_graph, AppState
+from .agent import app_graph, AppState  # Keep after env setup
 from .reporting import generate_report
 
 app = typer.Typer()
+
+
+# Helper to display script snippet
+def display_script_snippet(script_content: str, n_lines: int = 5) -> None:
+  lines = script_content.splitlines()
+  if not lines:
+    typer.secho("(Script is empty)", fg=typer.colors.YELLOW)
+    return
+
+  if len(lines) <= 2 * n_lines:
+    typer.secho("--- Full Script (short) ---", fg=typer.colors.CYAN)
+    for line in lines:
+      typer.secho(line, fg=typer.colors.GREEN)
+  else:
+    typer.secho("--- First N lines ---", fg=typer.colors.CYAN)
+    for line in lines[:n_lines]:
+      typer.secho(line, fg=typer.colors.GREEN)
+    typer.secho("...", fg=typer.colors.CYAN)
+    typer.secho("--- Last N lines ---", fg=typer.colors.CYAN)
+    for line in lines[-n_lines:]:
+      typer.secho(line, fg=typer.colors.GREEN)
+  typer.secho("--- End Snippet ---", fg=typer.colors.CYAN)
 
 
 @app.command()
 def analyze(
   dump_path: str = typer.Argument(..., help="Path to the memory dump file."),
   context: str = typer.Option(..., "--context", "-c", help="Initial context or suspicion for the analysis."),
+  snippet_lines: int = typer.Option(5, "--snippet-lines", "-sl",
+                                    help="Number of lines for top/bottom snippet of Python scripts."),
 ):
   print(f"--- Starting AutoVol Analysis ---")
   print(f"Dump File: {dump_path}")
   print(f"Initial Context: {context}")
+  print(f"Python script snippet lines: {snippet_lines}")
 
   if not os.path.exists(dump_path):
     print(f"\nError: Memory dump file not found at '{dump_path}'")
@@ -53,7 +78,6 @@ def analyze(
   timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
   safe_dump_stem = "".join(c if c.isalnum() else '_' for c in Path(dump_path).stem)
   report_session_id = f"autovol_report_{safe_dump_stem}_{timestamp_str}"
-
 
   initial_state_dict: AppState = {
     "messages": [HumanMessage(content=context)],
@@ -77,202 +101,317 @@ def analyze(
   id_of_ai_message_content_streamed: Optional[str] = None
 
   try:
-    while True:
-      if not isinstance(current_input_for_graph_stream, Command):
+    while True:  # Main agent interaction loop
+      if not isinstance(current_input_for_graph_stream, Command):  # Don't print for Command inputs
         print(f"\n--- Agent Reasoning Cycle ---")
 
       should_continue_while_loop_after_this_cycle = False
       input_for_next_graph_cycle = None
-      Path("reports").mkdir(exist_ok=True)
+      Path("reports").mkdir(exist_ok=True)  # Ensure base reports dir exists
 
       async_gen = app_graph.stream(
         current_input_for_graph_stream,
         config=config_for_stream,
-        stream_mode=["updates", "messages"]
+        stream_mode=["updates", "messages"]  # We need "updates" to get the __interrupt__ reliably
       )
 
+      # Process stream from the graph for one full pass or until an interrupt
       for i, raw_chunk_from_graph in enumerate(async_gen):
         current_graph_state_candidate = app_graph.get_state(config_for_stream)
-        if current_graph_state_candidate:
+        if current_graph_state_candidate:  # Update our view of the latest full state
           final_full_state_for_report = cast(AppState, current_graph_state_candidate.values)
 
         is_interrupt_chunk = False
-        interrupt_data_payload = None
+        interrupt_data_payload = None  # This will hold the tuple (InterruptObject, Checkpoint)
 
+        # Check if the raw_chunk_from_graph itself is the interrupt dictionary
         if isinstance(raw_chunk_from_graph, dict) and "__interrupt__" in raw_chunk_from_graph:
           is_interrupt_chunk = True
           interrupt_data_payload = raw_chunk_from_graph["__interrupt__"]
+        # Check if it's a tuple (stream_mode, data) and data contains interrupt
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name_for_interrupt_check, chunk_data_for_interrupt_check = raw_chunk_from_graph
           if stream_mode_name_for_interrupt_check == "updates" and \
             isinstance(chunk_data_for_interrupt_check, dict) and \
-            "__interrupt__" in chunk_data_for_interrupt_check:
+            "__interrupt__" in chunk_data_for_interrupt_check:  # LangGraph usually puts __interrupt__ in the 'updates' part
             is_interrupt_chunk = True
             interrupt_data_payload = chunk_data_for_interrupt_check["__interrupt__"]
 
         if is_interrupt_chunk:
-          should_continue_while_loop_after_this_cycle = True
-          if ai_content_was_streamed_for_current_ai_message:
+          should_continue_while_loop_after_this_cycle = True  # Signal that the outer loop should continue
+          if ai_content_was_streamed_for_current_ai_message:  # Newline after any streamed AI content
             print()
             ai_content_was_streamed_for_current_ai_message = False
             id_of_ai_message_content_streamed = None
 
-          if interrupt_data_payload is None:
+          if interrupt_data_payload is None:  # Should not happen if is_interrupt_chunk is True
             print("CRITICAL ERROR: is_interrupt_chunk is true but interrupt_data_payload is None.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Internal error processing interrupt structure."}
             )
-            break
-          interrupt_tuple_from_graph = interrupt_data_payload
-          if not isinstance(interrupt_tuple_from_graph, tuple) or not interrupt_tuple_from_graph:
+            break  # Break from this inner for-loop over stream chunks
+
+          # LangGraph's interrupt_data_payload is usually a tuple: (InterruptObject, CheckpointDict_or_None)
+          if not isinstance(interrupt_data_payload, tuple) or not interrupt_data_payload:
             print("Error: __interrupt__ value is not a valid tuple.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
             break
-          interrupt_object = interrupt_tuple_from_graph[0]
+
+          interrupt_object = interrupt_data_payload[0]  # The Interrupt instance
           if not isinstance(interrupt_object, Interrupt):
             print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt payload type from graph"})
             break
 
-          interrupt_payload_from_graph_value = interrupt_object.value
-          print("\n\n--- Agent Proposes Command: Human Input Required ---")
-          tool_args_to_review = interrupt_payload_from_graph_value.get("tool_call_args", {})
-          user_decision_payload = {}
-          if interrupt_payload_from_graph_value.get("error_condition"):
-            error_reasoning_display = interrupt_payload_from_graph_value.get("reasoning_and_thinking",
-                                                                             "Error: No specific reason provided for error condition.")
+          interrupt_payload_from_graph_node = interrupt_object.value  # This is the dict from human_tool_review_node
+          print("\n\n--- Agent Proposes Action: Human Input Required ---")
+
+          tool_name_to_review = interrupt_payload_from_graph_node.get("tool_name", "unknown_tool")
+          # tool_args_to_review contains the *original* args proposed by LLM (e.g. LLM's code string)
+          tool_args_to_review = interrupt_payload_from_graph_node.get("tool_call_args", {})
+          # temp_script_path_for_review is the path where agent.py saved the LLM's code
+          temp_script_path_for_review = interrupt_payload_from_graph_node.get("temp_script_path")
+
+          user_decision_payload = {}  # This will be sent back in Command(resume=...)
+
+          if interrupt_payload_from_graph_node.get("error_condition"):
+            error_reasoning_display = interrupt_payload_from_graph_node.get("reasoning_and_thinking",
+                                                                            "Error: No specific reason provided for error condition.")
             print(f"Error condition from review node: {error_reasoning_display}")
             user_decision_payload = {"action": "internal_error_at_review", "reason": error_reasoning_display}
-          else:
-            plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
-            plugin_args = tool_args_to_review.get('plugin_args', [])
-            print()
-            typer.echo(f"Proposed command: ", nl=False)
-            typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
+          else:  # No error, proceed with normal review
+            if tool_name_to_review == "volatility_runner":
+              plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
+              plugin_args = tool_args_to_review.get('plugin_args', [])
+              print()
+              typer.echo(f"Proposed Volatility command: ", nl=False)
+              typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
+
+            elif tool_name_to_review == "python_interpreter":
+              print()
+              typer.secho(f"Proposed Python code to execute:", fg=typer.colors.YELLOW)
+              original_python_code_from_llm = tool_args_to_review.get('code', '# No code provided by LLM')
+
+              if temp_script_path_for_review and Path(temp_script_path_for_review).exists():
+                typer.echo(f"Script saved for review at: ", nl=False)
+                typer.secho(temp_script_path_for_review, fg=typer.colors.BLUE, underline=True)
+                try:
+                  # Read content from the temp file for snippet display
+                  with open(temp_script_path_for_review, "r", encoding="utf-8") as f_script:
+                    script_content_for_snippet = f_script.read()
+                  display_script_snippet(script_content_for_snippet, n_lines=snippet_lines)
+                except Exception as e_read:
+                  typer.secho(f" (Could not read script from temp file for snippet: {e_read})", fg=typer.colors.RED)
+                  # Fallback: display snippet from original LLM code if temp file read fails
+                  display_script_snippet(original_python_code_from_llm, n_lines=snippet_lines)
+              else:
+                typer.secho(
+                  "(Script not saved to temp file or path unavailable, showing inline snippet from LLM proposal)",
+                  fg=typer.colors.YELLOW)
+                display_script_snippet(original_python_code_from_llm, n_lines=snippet_lines)
+            else:  # Generic tool display
+              typer.echo(f"Proposed action for tool '{tool_name_to_review}': ", nl=False)
+              typer.secho(str(tool_args_to_review), fg=typer.colors.YELLOW)
+
+            # Common prompt for Approve, Modify, Deny
             while True:
-              action_choice = typer.prompt("Approve (a), Modify (m), or Deny (d) the command?").lower()
+              action_choice = typer.prompt("Approve (a), Modify (m), or Deny (d) the action?").lower()
               if action_choice in ['a', 'm', 'd']:
                 break
               typer.echo("Invalid choice. Please enter 'a', 'm', or 'd'.", err=True)
+
             if action_choice == 'a':
               user_decision_payload = {"action": "approve"}
             elif action_choice == 'd':
               denial_reason = typer.prompt("Reason for denial (optional, press Enter for default):",
                                            default="User denied without specific reason.", show_default=False)
               user_decision_payload = {"action": "deny", "reason": denial_reason}
-            elif action_choice == 'm':
-              modified_plugin_name = typer.prompt(f"New plugin name (current: {plugin_name})", default=plugin_name)
-              current_args_str = ' '.join(plugin_args)
-              modified_args_str = typer.prompt(f"New plugin args (space-separated, current: '{current_args_str}')",
-                                               default=current_args_str)
-              modified_plugin_args = modified_args_str.split() if modified_args_str else []
+            elif action_choice == 'm':  # Modify action
+              modified_args_for_payload = {}  # This will hold the new tool args
+              if tool_name_to_review == "volatility_runner":
+                current_plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
+                current_plugin_args = tool_args_to_review.get('plugin_args', [])
+                modified_plugin_name = typer.prompt(f"New Volatility plugin name (current: {current_plugin_name})",
+                                                    default=current_plugin_name)
+                current_args_str = ' '.join(current_plugin_args)
+                modified_args_str = typer.prompt(f"New plugin args (space-separated, current: '{current_args_str}')",
+                                                 default=current_args_str)
+                modified_plugin_args_list = modified_args_str.split() if modified_args_str else []
+                modified_args_for_payload = {
+                  "plugin_name": modified_plugin_name,
+                  "plugin_args": modified_plugin_args_list
+                }
+              elif tool_name_to_review == "python_interpreter":
+                # Get the original code, either from temp file (if exists) or from LLM's proposal
+                code_to_edit = original_python_code_from_llm
+                if temp_script_path_for_review and Path(temp_script_path_for_review).exists():
+                  try:
+                    with open(temp_script_path_for_review, "r", encoding="utf-8") as f_edit:
+                      code_to_edit = f_edit.read()
+                  except Exception:
+                    typer.secho(
+                      f"Warning: Could not re-read {temp_script_path_for_review} for editing, using LLM's original code.",
+                      fg=typer.colors.YELLOW)
+
+                edited_code_content = typer.edit(text=code_to_edit, extension=".py")
+
+                if edited_code_content is None:  # Editor closed without saving or error
+                  typer.secho("Editor closed or failed. Using original code for modification attempt.",
+                              fg=typer.colors.YELLOW)
+                  edited_code_content = code_to_edit
+                elif not edited_code_content.strip() and code_to_edit.strip():  # User deleted everything from non-empty original
+                  typer.secho("Editor returned empty content. Please provide some code or deny.", fg=typer.colors.RED)
+                  # Fallback to re-prompting or using original, here we use original
+                  edited_code_content = code_to_edit
+
+                modified_args_for_payload = {"code": edited_code_content}
+              else:  # Generic tool modification (fallback)
+                typer.echo(
+                  f"Modification for tool '{tool_name_to_review}' using generic JSON edit (current: {tool_args_to_review}).",
+                  err=True)
+                new_args_str = typer.prompt("Enter new JSON args string:", default=str(tool_args_to_review))
+                try:
+                  modified_args_for_payload = eval(new_args_str)  # Be cautious with eval
+                except:
+                  typer.echo("Invalid args format. Reverting to original.", err=True)
+                  modified_args_for_payload = tool_args_to_review
+
               user_decision_payload = {
                 "action": "modify",
-                "modified_tool_args": {
-                  "plugin_name": modified_plugin_name,
-                  "plugin_args": modified_plugin_args
-                }
+                "modified_tool_args": modified_args_for_payload  # This contains the new args for the tool
               }
+          # --- End of Approve/Modify/Deny logic ---
           input_for_next_graph_cycle = Command(resume=user_decision_payload)
-          break
+          break  # Crucial: Break from the inner for-loop (graph stream chunks) to process the Command
+
+        # --- Non-Interrupt Stream Chunk Handling (messages, updates) ---
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name, chunk_data = raw_chunk_from_graph
-          if stream_mode_name == "messages":
+          if stream_mode_name == "messages":  # LLM token streaming
             message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
             if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
-              if not ai_content_was_streamed_for_current_ai_message:
-                print(f"AI: ", end="")
+              if not ai_content_was_streamed_for_current_ai_message:  # First token for this AI message
+                print(f"AI: ", end="")  # Start "AI: " prefix
                 id_of_ai_message_content_streamed = message_chunk.id
-              print(message_chunk.content, end="", flush=True)
+              print(message_chunk.content, end="", flush=True)  # Stream content
               ai_content_was_streamed_for_current_ai_message = True
-          elif stream_mode_name == "updates":
-            if not chunk_data:
+
+          elif stream_mode_name == "updates":  # Graph state updates after a node runs
+            if not chunk_data:  # Empty update
               continue
-            node_name_that_ran = list(chunk_data.keys())[0]
+
+            # Example: chunk_data might be {'agent_node': {'messages': [AIMessage(...)]}}
+            # We need to print messages that haven't been shown yet.
             if final_full_state_for_report and "messages" in final_full_state_for_report:
               all_messages_now = final_full_state_for_report["messages"]
               new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
+
               if new_messages_to_print:
+                # If AI content was just streamed and this update is from the same agent node, add newline.
+                node_name_that_just_ran = list(chunk_data.keys())[0]
                 if ai_content_was_streamed_for_current_ai_message and \
-                  node_name_that_ran == "agent" and \
+                  node_name_that_just_ran == "agent" and \
                   new_messages_to_print and \
                   isinstance(new_messages_to_print[0], AIMessage) and \
                   new_messages_to_print[0].id == id_of_ai_message_content_streamed:
-                  print()
-                for msg_idx, msg in enumerate(new_messages_to_print):
-                  if isinstance(msg, AIMessage):
-                    content_already_streamed_for_this_msg = (
+                  print()  # Newline after streamed AI content from 'agent' node
+
+                for msg_idx, msg_to_print in enumerate(new_messages_to_print):
+                  if isinstance(msg_to_print, AIMessage):
+                    # Was this AIMessage's content already streamed via "messages" mode?
+                    content_already_streamed = (
                       ai_content_was_streamed_for_current_ai_message and
-                      msg.id == id_of_ai_message_content_streamed
+                      msg_to_print.id == id_of_ai_message_content_streamed
                     )
-                    if content_already_streamed_for_this_msg:
+                    if content_already_streamed:
+                      # Content already printed. Reset flag for the *next* AI message.
                       ai_content_was_streamed_for_current_ai_message = False
                       id_of_ai_message_content_streamed = None
-                    else:
-                      ai_content_print = ""
-                      if isinstance(msg.content, list):
-                        for block_content in msg.content:
-                          if isinstance(block_content, dict) and block_content.get("type") == "text":
-                            ai_content_print += block_content.get("text", "") + "\n"
-                      elif isinstance(msg.content, str):
-                        ai_content_print = msg.content
-                      if ai_content_print.strip():
-                        print(f"AI: {ai_content_print.strip()}")
-                    if msg.tool_calls:
+                    else:  # Content not streamed (e.g., AIMessage from process_review_decision)
+                      ai_text_content = ""
+                      if isinstance(msg_to_print.content, list):  # Handle block content
+                        for block in msg_to_print.content:
+                          if isinstance(block, dict) and block.get("type") == "text":
+                            ai_text_content += block.get("text", "") + "\n"
+                      elif isinstance(msg_to_print.content, str):
+                        ai_text_content = msg_to_print.content
+
+                      if ai_text_content.strip():
+                        print(f"AI: {ai_text_content.strip()}")
+
+                    # Always print tool call summary if present for this AIMessage
+                    if msg_to_print.tool_calls:
                       tool_call_summary_parts = []
-                      for tc in msg.tool_calls:
-                        tc_plugin = tc['args'].get('plugin_name', 'N/A')
-                        tc_plugin_args_list = tc['args'].get('plugin_args', [])
-                        tc_plugin_args_str = ' '.join(tc_plugin_args_list) if tc_plugin_args_list else ""
-                        tool_call_summary_parts.append(f"{tc_plugin} {tc_plugin_args_str}".strip())
-                      if not content_already_streamed_for_this_msg or not msg.content:
+                      for tc in msg_to_print.tool_calls:
+                        tc_tool_name = tc['name']
+                        tc_args_dict = tc['args']
+                        summary_detail = f"Tool: {tc_tool_name}"  # Default summary
+                        if tc_tool_name == "volatility_runner":
+                          tc_plugin = tc_args_dict.get('plugin_name', 'N/A')
+                          tc_plugin_args_list = tc_args_dict.get('plugin_args', [])
+                          tc_plugin_args_str = ' '.join(tc_plugin_args_list) if tc_plugin_args_list else ""
+                          summary_detail = f"Volatility: {tc_plugin} {tc_plugin_args_str}".strip()
+                        elif tc_tool_name == "python_interpreter":
+                          summary_detail = "Python Code (details in log/review)"
+                        tool_call_summary_parts.append(summary_detail)
+
+                      # Newline before tool call if AI text was not streamed OR was empty
+                      if not content_already_streamed or not msg_to_print.content or not str(
+                        msg_to_print.content).strip():
                         print()
                       print(f"Tool Call Proposed: {', '.join(tool_call_summary_parts)}")
-                      print()
-                  elif isinstance(msg, ToolMessage):
-                    print()
-                    # ToolMessage.content is now the FULL output.
-                    # For CLI display, we might still want to truncate it here.
-                    # The agent gets the full output, which is key.
-                    tool_output_for_cli = msg.content
-                    if len(tool_output_for_cli) > 500: # Truncate for CLI only
-                      tool_output_for_cli = tool_output_for_cli[:500] + "...\n(Full output processed by agent and saved to report)"
-                    print(f"Tool Result ({msg.name if msg.name else msg.tool_call_id}):\n{tool_output_for_cli}")
-                    print()
-                  elif isinstance(msg, HumanMessage):
-                    if num_messages_printed_for_cli > 0 or msg is not all_messages_now[0]:
-                      print(f"System/User Feedback: {msg.content}")
-                num_messages_printed_for_cli = len(all_messages_now)
-          else:
-            print(f"Warning: Received chunk for unhandled stream mode: {stream_mode_name} with data: {chunk_data}")
-        else:
-          print(f"Warning: Stream yielded an unrecognized chunk format: {raw_chunk_from_graph}")
+                      if not content_already_streamed or not msg_to_print.content or not str(
+                        msg_to_print.content).strip():  # Add another newline if there was no preceding AI text
+                        print()
 
-      if should_continue_while_loop_after_this_cycle:
-        if input_for_next_graph_cycle is None:
+                  elif isinstance(msg_to_print, ToolMessage):
+                    print()  # Ensure separation
+                    tool_output_for_cli = msg_to_print.content
+                    max_tool_output_cli = 700
+                    tool_name_for_display = msg_to_print.name if msg_to_print.name else msg_to_print.tool_call_id
+                    if len(tool_output_for_cli) > max_tool_output_cli:
+                      tool_output_for_cli = tool_output_for_cli[:max_tool_output_cli] + \
+                                            f"...\n(Full output for '{tool_name_for_display}' processed by agent)"
+                    print(f"Tool Result ({tool_name_for_display}):\n{tool_output_for_cli}")
+                    print()
+                  elif isinstance(msg_to_print, HumanMessage):
+                    # Print HumanMessage only if it's not the very first one (initial context)
+                    if num_messages_printed_for_cli > 0 or msg_to_print is not all_messages_now[0]:
+                      print(f"System/User Feedback: {msg_to_print.content}")
+                num_messages_printed_for_cli = len(all_messages_now)  # Update count
+          else:  # Unhandled stream mode
+            print(f"Warning: Received chunk for unhandled stream mode: {stream_mode_name} with data: {chunk_data}")
+        else:  # Unrecognized chunk format from stream
+          print(f"Warning: Stream yielded an unrecognized chunk format: {raw_chunk_from_graph}")
+      # --- End of for-loop over stream chunks ---
+
+      if should_continue_while_loop_after_this_cycle:  # Interrupt was handled
+        if input_for_next_graph_cycle is None:  # Should have been set if interrupt occurred
           print("CRITICAL ERROR: Interrupt was signaled, but no input_for_next_graph_cycle was set. Terminating.")
-          raise StopIteration("Interrupt handling logical error")
+          # No explicit StopIteration here, as we want to reach 'finally' for report
+          break  # Break the while True loop
         current_input_for_graph_stream = input_for_next_graph_cycle
-        continue
-      else:
-        if ai_content_was_streamed_for_current_ai_message:
+        continue  # To next iteration of the while True loop (main agent cycle)
+      else:  # Graph finished a full pass without an interrupt
+        if ai_content_was_streamed_for_current_ai_message:  # Ensure newline if last thing was streamed AI content
           print()
           ai_content_was_streamed_for_current_ai_message = False
           id_of_ai_message_content_streamed = None
-        print("\n--- Analysis Concluded by Agent ---")
-        raise StopIteration
-  except StopIteration:
-    print("Agent interaction cycle completed.")
-  except Exception as e:
-    print(f"\n--- An error occurred during graph execution ---")
+        print("\n--- Analysis Concluded by Agent (or max recursion) ---")
+        break  # Exit the while True loop, proceed to 'finally'
+    # --- End of while True agent interaction loop ---
+
+  except Exception as e:  # Catch any unexpected errors during the while loop or stream processing
+    print(f"\n--- An unexpected error occurred during agent execution ---")
     print(f"{type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-    raise typer.Exit(code=1)
-  finally:
-    if ai_content_was_streamed_for_current_ai_message:
+    # Let it fall through to 'finally' for report generation attempt
+
+  finally:  # Always try to generate a report
+    if ai_content_was_streamed_for_current_ai_message:  # Just in case of premature exit
       print()
     print("\n--- AutoVol Session Ended ---")
     if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
@@ -283,16 +422,15 @@ def analyze(
       final_profile = final_full_state_for_report.get("profile", "Profile Not Detected")
       session_id_for_report = final_full_state_for_report.get("report_session_id", report_session_id)
 
-
       final_summary_text = "No final summary message found from AI."
       messages_in_final_state = final_full_state_for_report.get("messages", [])
       if isinstance(messages_in_final_state, list):
         for msg_obj in reversed(messages_in_final_state):
-          if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:
+          if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:  # Last non-tool-calling AIMessage
             current_msg_text_parts = []
             if isinstance(msg_obj.content, str):
               current_msg_text_parts.append(msg_obj.content)
-            elif isinstance(msg_obj.content, list):
+            elif isinstance(msg_obj.content, list):  # Handle block content
               for _content_block in msg_obj.content:
                 if isinstance(_content_block, dict) and _content_block.get("type") == "text":
                   current_msg_text_parts.append(_content_block.get("text", ""))
@@ -311,11 +449,12 @@ def analyze(
       )
       print(report_msg)
     else:
-      print("Warning: Could not generate final report due to missing or invalid state at the very end.")
+      print("Warning: Could not generate final report due to missing or invalid final state.")
       if final_full_state_for_report is None:
         print("Reason: final_full_state_for_report was None.")
       elif not isinstance(final_full_state_for_report, dict):
         print(f"Reason: final_full_state_for_report was not a dictionary, type: {type(final_full_state_for_report)}")
+
 
 if __name__ == "__main__":
   app()
