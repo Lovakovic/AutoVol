@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  autovol:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: autovol-app 
+    container_name: autovol_container
+    
+    stdin_open: true # Equivalent to docker run -i
+    tty: true        # Equivalent to docker run -t
+
+    volumes:
+      - "./sample_dumps/test_dump.mem:/mnt/dump.mem:ro" 
+      - "./gcloud_keys/vertex_key.json:/gcloud_key/vertex_key.json:ro"
+      - "./autovol_output:/app/reports"
+
+    command: [
+      "/mnt/dump.mem", 
+      "--context", 
+      "List running processes and then list open network connections."
+    ]

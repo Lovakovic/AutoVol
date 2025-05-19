@@ -9,11 +9,11 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Interrupt, interrupt
 from pathlib import Path
-# import tempfile # We'll use a session-specific dir for easier user access
 
 from .volatility_runner import detect_profile, run_volatility_tool_logic, volatility_runner_tool, \
   list_all_available_plugins
 from .python_interpreter import python_interpreter_tool, run_python_code_logic
+from .workspace_utils import list_workspace_files_tool, list_workspace_files_logic # New import
 from .prompts import SYSTEM_PROMPT_TEMPLATE
 
 DETECT_PROFILE_CALL_COUNT = 0
@@ -28,6 +28,7 @@ class AppState(TypedDict):
   investigation_log: List[Dict[str, Any]]
   last_user_review_decision: Optional[Dict]
   report_session_id: str
+  # session_workspace_path: Optional[str] # Not strictly needed in state if derived in nodes
 
 
 llm = ChatVertexAI(
@@ -35,11 +36,11 @@ llm = ChatVertexAI(
   temperature=1,
   max_output_tokens=8000,
 )
-llm_with_tool = llm.bind_tools([volatility_runner_tool, python_interpreter_tool])
+# Add the new tool to the LLM binding
+llm_with_tool = llm.bind_tools([volatility_runner_tool, python_interpreter_tool, list_workspace_files_tool])
 
 
 def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
-  # ... (no changes to this function)
   reasoning_parts = []
   if hasattr(ai_message, 'response_metadata') and 'claude-messages-thinking' in ai_message.response_metadata:
     thinking_log = ai_message.response_metadata['claude-messages-thinking']
@@ -82,8 +83,6 @@ def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
   return "\n---\n".join(reasoning_parts)
 
 
-# tool_executor_node, detect_profile_node, list_plugins_node, agent_node remain unchanged from the previous step
-# ... (paste the unchanged tool_executor_node, detect_profile_node, list_plugins_node, agent_node here) ...
 def tool_executor_node(state: AppState) -> dict:
   messages = state["messages"]
   ai_message_with_tool_call = None
@@ -104,6 +103,15 @@ def tool_executor_node(state: AppState) -> dict:
   if not report_session_id:
     return {"messages": [ToolMessage(content="Error: report_session_id not found in state.",
                                      tool_call_id=tool_call["id"])]}
+  
+  # --- Session Workspace Path --- 
+  session_workspace_path = Path("reports") / report_session_id / "workspace"
+  try:
+    session_workspace_path.mkdir(parents=True, exist_ok=True)
+  except Exception as e:
+    return {"messages": [ToolMessage(content=f"Error creating session workspace '{session_workspace_path}': {e}",
+                                     tool_call_id=tool_call["id"])]}
+  # --- End Session Workspace Path ---
 
   log_entry = {}
   tool_output_for_message = ""
@@ -129,7 +137,8 @@ def tool_executor_node(state: AppState) -> dict:
       plugin_name=plugin_name_from_llm,
       plugin_args=plugin_args_from_llm,
       dump_path=dump_path,
-      profile=profile_context
+      profile=profile_context,
+      session_workspace_dir=str(session_workspace_path) # Pass workspace path
     )
     tool_output_for_message = tool_output_content
 
@@ -145,7 +154,7 @@ def tool_executor_node(state: AppState) -> dict:
       with open(full_output_file_path_obj, "w", encoding="utf-8") as f:
         f.write(tool_output_content)
       print(f"Full Volatility output saved to: {full_output_file_path_obj}")
-      output_file_path_for_log = str(Path("command_outputs") / output_filename)
+      output_file_path_for_log = str(Path("command_outputs") / output_filename) # Relative to session dir
     except Exception as e:
       print(f"Error saving full Volatility output to {full_output_file_path_obj}: {e}")
 
@@ -162,20 +171,20 @@ def tool_executor_node(state: AppState) -> dict:
     }
 
   elif tool_name_called_by_llm == python_interpreter_tool.name:
-    python_code_to_execute = tool_args.get("code")  # This code is the one approved/modified by user
+    python_code_to_execute = tool_args.get("code")
     if not python_code_to_execute:
       error_msg = "Error: 'code' missing in Python interpreter tool arguments from LLM."
       return {"messages": [ToolMessage(content=error_msg, tool_call_id=tool_call["id"])]}
 
-    print(f"--- Executing Python Code ---")
-    execution_result = run_python_code_logic(python_code_to_execute)
+    print(f"--- Executing Python Code (in workspace: {session_workspace_path}) ---")
+    execution_result = run_python_code_logic(
+        python_code_to_execute, 
+        session_workspace_dir=str(session_workspace_path) # Pass workspace path
+    )
     stdout_str = execution_result.get("stdout", "")
     stderr_str = execution_result.get("stderr", "")
-
     tool_output_for_message = f"Python Code Execution Result:\nStdout:\n{stdout_str}\nStderr:\n{stderr_str}"
-
     combined_output_for_details = f"Stdout:\n```\n{stdout_str.strip()}\n```\n\nStderr:\n```\n{stderr_str.strip()}\n```"
-
     preview_limit = 125
     stdout_preview = stdout_str[:preview_limit] + ('...' if len(stdout_str) > preview_limit else '')
     stderr_preview = stderr_str[:preview_limit] + ('...' if len(stderr_str) > preview_limit else '')
@@ -187,11 +196,30 @@ def tool_executor_node(state: AppState) -> dict:
       "type": "tool_execution",
       "tool_name": tool_name_called_by_llm,
       "reasoning": reasoning_for_log,
-      "command": f"python_code:\n```python\n{python_code_to_execute}\n```",
+      "command": f"python_code (executed in session workspace):\n```python\n{python_code_to_execute}\n```",
       "tool_input": tool_args,
-      "output_file_path": None,
+      "output_file_path": None, # Python scripts manage their own files in workspace
       "output_details": combined_output_for_details.strip(),
       "raw_output_preview_for_prompt": raw_preview.strip()
+    }
+
+  elif tool_name_called_by_llm == list_workspace_files_tool.name: # New tool handling
+    relative_path_arg = tool_args.get("relative_path", ".") # Default to current dir ('.')
+    print(f"--- Listing Workspace Files (path: {relative_path_arg} in {session_workspace_path}) ---")
+    tool_output_content = list_workspace_files_logic(
+        session_workspace_dir=str(session_workspace_path),
+        relative_path=relative_path_arg
+    )
+    tool_output_for_message = tool_output_content
+    log_entry = {
+      "type": "tool_execution",
+      "tool_name": tool_name_called_by_llm,
+      "reasoning": reasoning_for_log,
+      "command": f"list_workspace_files: relative_path='{relative_path_arg}'",
+      "tool_input": tool_args,
+      "output_file_path": None,
+      "output_details": tool_output_content,
+      "raw_output_preview_for_prompt": tool_output_content[:350] + "..." if len(tool_output_content) > 350 else tool_output_content
     }
 
   else:
@@ -213,6 +241,7 @@ def detect_profile_node(state: AppState) -> dict:
   DETECT_PROFILE_CALL_COUNT += 1
   print(f"--- Detecting Profile (Call #{DETECT_PROFILE_CALL_COUNT}) ---")
   dump_path = state["dump_path"]
+  # Profile detection does not need workspace context
   profile = detect_profile(dump_path)
   if not profile:
     return {"profile": None}
@@ -274,7 +303,9 @@ def agent_node(state: AppState) -> dict:
       if tool_name_entry == python_interpreter_tool.name:
         cmd_display = "Python Code Executed (see details in log)"
       elif tool_name_entry == volatility_runner_tool.name:
-        cmd_display = cmd_display
+        cmd_display = cmd_display # Already formatted
+      elif tool_name_entry == list_workspace_files_tool.name:
+        cmd_display = cmd_display # Already formatted
 
       log_summary_parts.append(f"- Command: {cmd_display}\n  Output Preview: {output_preview}")
     elif entry_type == "user_decision" or entry_type == "internal_error":
@@ -328,7 +359,7 @@ def human_tool_review_node(state: AppState) -> dict:
     interrupt_payload_for_main_prompt = {
       "reasoning_and_thinking": "Error: No AI tool call to review.",
       "tool_name": "N/A",
-      "tool_call_args": {},  # Keep generic for error
+      "tool_call_args": {},
       "tool_call_id": "error_no_tool_call_for_review",
       "error_condition": True
     }
@@ -342,45 +373,33 @@ def human_tool_review_node(state: AppState) -> dict:
     if tool_name == python_interpreter_tool.name:
       python_code = tool_args.get("code", "# No code provided by LLM")
       report_session_id = state.get("report_session_id", "unknown_session")
-      # Create a dedicated subdirectory for scripts to be reviewed
       review_scripts_dir = Path("reports") / report_session_id / "review_scripts"
       review_scripts_dir.mkdir(parents=True, exist_ok=True)
-
-      # Sanitize tool_call_id for use in filename or use a UUID
       sane_tool_call_id = "".join(c if c.isalnum() else '_' for c in tool_call_to_review['id'])
       script_file_name = f"review_script_{sane_tool_call_id}.py"
       temp_script_path_obj = review_scripts_dir / script_file_name
-
       try:
         with open(temp_script_path_obj, "w", encoding="utf-8") as f:
           f.write(python_code)
-        temp_script_path_for_review = str(temp_script_path_obj.resolve())  # Get absolute path
+        temp_script_path_for_review = str(temp_script_path_obj.resolve())
         print(f"Python script for review saved to: {temp_script_path_for_review}")
       except Exception as e:
         print(f"Error saving Python script for review: {e}")
-        # temp_script_path_for_review will remain None, main.py should handle this
         pass
 
     interrupt_payload_for_main_prompt = {
       "reasoning_and_thinking": extracted_reasoning,
       "tool_name": tool_name,
-      "tool_call_args": tool_args,  # Still pass original args (contains code for snippet fallback)
+      "tool_call_args": tool_args,
       "tool_call_id": tool_call_to_review["id"],
-      "temp_script_path": temp_script_path_for_review  # This will be None if not Python or if save failed
+      "temp_script_path": temp_script_path_for_review
     }
   user_decision_from_main = interrupt(interrupt_payload_for_main_prompt)
   return {"last_user_review_decision": user_decision_from_main}
 
 
 def process_human_review_decision_node(state: AppState) -> dict:
-  # This node doesn't need to change significantly.
-  # If the user modified the Python code, main.py will read the edited content
-  # from the temp file and pass the *string content* of the new code
-  # in `user_decision.get("modified_tool_args")`.
-  # This node then constructs the AIMessage with this new code string.
-  # ... (paste the unchanged process_human_review_decision_node here) ...
   user_decision = state.get("last_user_review_decision")
-
   if user_decision is None:
     err_msg = "Critical Error: last_user_review_decision not found."
     return {"messages": [HumanMessage(content=err_msg)], "last_user_review_decision": None}
@@ -395,7 +414,6 @@ def process_human_review_decision_node(state: AppState) -> dict:
   original_tool_name_called = "unknown_tool"
   original_tool_args_dict_display = {}
   command_display_for_log = "N/A"
-
   original_tool_call_name_attr = "unknown_tool"
   original_tool_call_id_attr = "unknown_id"
   extracted_reasoning = "Original AI reasoning not available."
@@ -421,11 +439,13 @@ def process_human_review_decision_node(state: AppState) -> dict:
     elif original_tool_name_called == python_interpreter_tool.name:
       p_code = original_tool_args_dict_display.get('code', '# No code provided')
       command_display_for_log = f"python_code:\n```python\n{p_code[:200]}{'...' if len(p_code) > 200 else ''}\n```"
+    elif original_tool_name_called == list_workspace_files_tool.name:
+        rel_path = original_tool_args_dict_display.get('relative_path', '.')
+        command_display_for_log = f"list_workspace_files: relative_path='{rel_path}'"
 
   current_log = state.get("investigation_log", [])
   log_updates = []
   message_updates_to_add = []
-
   log_entry_base = {"type": "user_decision", "output_file_path": None, "tool_name": original_tool_name_called}
 
   if action == "approve":
@@ -436,8 +456,6 @@ def process_human_review_decision_node(state: AppState) -> dict:
       "tool_input": original_tool_args_dict_display,
       "output_details": "Command approved by user."
     })
-    # For 'approve', no new AIMessage is added by this node. The existing one from 'agent_node'
-    # (which triggered the interrupt) will proceed to 'tool_executor'.
 
   elif action == "modify":
     modified_tool_args_from_user = user_decision.get("modified_tool_args")
@@ -451,11 +469,16 @@ def process_human_review_decision_node(state: AppState) -> dict:
         mod_p_args = modified_tool_args_from_user.get('plugin_args', [])
         modified_command_display_for_log = f"volatility: {mod_p_name} {' '.join(mod_p_args)}"
     elif original_tool_name_called == python_interpreter_tool.name:
-      # modified_tool_args_from_user for Python will be {"code": "new_code_string"}
       if modified_tool_args_from_user and "code" in modified_tool_args_from_user:
         valid_modification = True
         mod_p_code = modified_tool_args_from_user.get('code', '# No code provided')
         modified_command_display_for_log = f"python_code:\n```python\n{mod_p_code[:200]}{'...' if len(mod_p_code) > 200 else ''}\n```"
+    elif original_tool_name_called == list_workspace_files_tool.name:
+        # For list_workspace_files, any dict is technically valid for args if it contains relative_path or is empty
+        if isinstance(modified_tool_args_from_user, dict):
+            valid_modification = True
+            mod_rel_path = modified_tool_args_from_user.get('relative_path', '.')
+            modified_command_display_for_log = f"list_workspace_files: relative_path='{mod_rel_path}'"
 
     if not valid_modification:
       message_updates_to_add.append(HumanMessage(
@@ -529,7 +552,6 @@ def process_human_review_decision_node(state: AppState) -> dict:
   return return_dict
 
 
-# Graph definition (no changes to structure)
 graph_builder = StateGraph(AppState)
 graph_builder.add_node("detect_profile", detect_profile_node)
 graph_builder.add_node("list_plugins", list_plugins_node)
@@ -540,53 +562,41 @@ graph_builder.add_node("tool_executor", tool_executor_node)
 
 graph_builder.add_edge(START, "detect_profile")
 
-
 def route_after_profile_detection(state: AppState) -> str:
   return "list_plugins" if state.get("profile") else "agent"
-
 
 graph_builder.add_conditional_edges("detect_profile", route_after_profile_detection,
                                     {"list_plugins": "list_plugins", "agent": "agent"})
 graph_builder.add_edge("list_plugins", "agent")
-
 
 def route_after_agent(state: AppState) -> str:
   if not state.get("profile"): return END
   last_msg = state["messages"][-1] if state.get("messages") else None
   return "human_tool_review_interrupt" if isinstance(last_msg, AIMessage) and last_msg.tool_calls else END
 
-
 graph_builder.add_conditional_edges("agent", route_after_agent,
                                     {"human_tool_review_interrupt": "human_tool_review_interrupt", END: END})
 
 graph_builder.add_edge("human_tool_review_interrupt", "process_review_decision")
 
-
 def route_after_processing_review(state: AppState) -> str:
   most_recent_ai_message_with_tool_call = None
-  # Iterate backwards through all messages to find the effective state
   for msg_idx in range(len(state.get("messages", [])) - 1, -1, -1):
     msg = state["messages"][msg_idx]
     if isinstance(msg, AIMessage):
-      if msg.tool_calls:  # This AIMessage intends to call a tool
+      if msg.tool_calls:
         most_recent_ai_message_with_tool_call = msg
-      # If it's an AIMessage without tool_calls, it means AI decided not to use a tool OR a previous tool_call was stripped (e.g. by deny)
-      # In either case, the presence of this AIMessage means we are past any tool_call decision for *this specific* AIMessage.
       break
     if isinstance(msg, HumanMessage):
-      # If a HumanMessage implies a denial or error *after* the last AIMessage we checked,
-      # then the tool call is effectively cancelled.
       if ("User feedback: The proposed tool call" in msg.content and "was denied" in msg.content) or \
         ("System: Internal error occurred" in msg.content):
-        most_recent_ai_message_with_tool_call = None  # Effectively cancelled
+        most_recent_ai_message_with_tool_call = None
         break
-        # Other HumanMessages (like initial context) don't cancel a preceding AI tool call.
 
   if most_recent_ai_message_with_tool_call:
     return "tool_executor"
   else:
     return "agent"
-
 
 graph_builder.add_conditional_edges("process_review_decision", route_after_processing_review,
                                     {"tool_executor": "tool_executor", "agent": "agent"})

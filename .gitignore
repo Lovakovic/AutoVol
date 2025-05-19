@@ -2,3 +2,5 @@
 /.env
 /concatenated.txt
 /vertex_key.json
+/autovol_output/
+/gcloud_keys/

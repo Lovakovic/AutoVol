@@ -1,6 +1,8 @@
 import io
+import os 
 import contextlib
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from pathlib import Path 
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
@@ -9,26 +11,28 @@ class PythonInterpreterInput(BaseModel):
   code: str = Field(description="The Python 3 code to execute.")
 
 
-def run_python_code_logic(code: str) -> Dict[str, str]:
+def run_python_code_logic(code: str, session_workspace_dir: Optional[str] = None) -> Dict[str, str]:
   """
   Executes the given Python 3 code and captures its stdout and stderr.
-
-  Args:
-      code: The Python 3 code string to execute.
-
-  Returns:
-      A dictionary containing 'stdout' and 'stderr' strings.
+  If session_workspace_dir is provided, changes CWD to it for code execution.
   """
   stdout_capture = io.StringIO()
   stderr_capture = io.StringIO()
   result_stdout = ""
   result_stderr = ""
 
+  original_cwd = os.getcwd()
   try:
-    # Create a dictionary for the local and global scope of exec
-    # This can be expanded with pre-defined variables if needed
+    if session_workspace_dir:
+      Path(session_workspace_dir).mkdir(parents=True, exist_ok=True) 
+      os.chdir(session_workspace_dir)
+      print(f"Python interpreter CWD set to: {session_workspace_dir}")
+    
     local_vars: Dict[str, Any] = {}
-    global_vars: Dict[str, Any] = {'__builtins__': __builtins__}
+    global_vars: Dict[str, Any] = {
+        '__builtins__': __builtins__,
+        'SESSION_WORKSPACE_DIR': str(Path(session_workspace_dir).resolve()) if session_workspace_dir else None
+    }
 
     with contextlib.redirect_stdout(stdout_capture):
       with contextlib.redirect_stderr(stderr_capture):
@@ -42,6 +46,9 @@ def run_python_code_logic(code: str) -> Dict[str, str]:
   finally:
     stdout_capture.close()
     stderr_capture.close()
+    if session_workspace_dir and Path(original_cwd).exists(): 
+        os.chdir(original_cwd)
+        print(f"Python interpreter CWD restored to: {original_cwd}")
 
   return {"stdout": result_stdout, "stderr": result_stderr}
 
@@ -49,15 +56,17 @@ def run_python_code_logic(code: str) -> Dict[str, str]:
 @tool("python_interpreter", args_schema=PythonInterpreterInput)
 def python_interpreter_tool(code: str) -> str:
   """
-  Executes Python 3 code and returns its standard output and standard error.
-  Use this tool for data manipulation, calculations, or any task programmable in Python.
-  The code is executed in a stateless environment.
+  Executes Python 3 code within a dedicated session workspace and returns its standard output and standard error.
+  The current working directory for the executed code is set to this session workspace.
+  This means you can use relative paths to read files created by Volatility (e.g., 'dumped_file.bin')
+  or to create new files (e.g., 'analysis_results.txt', 'my_plot.png').
+  
+  Available libraries: pandas, numpy, regex, requests, python-dateutil, PyYAML, matplotlib.
+  If using matplotlib, save plots to a file (e.g., plt.savefig('figure.png')) instead of plt.show().
+  A global variable `SESSION_WORKSPACE_DIR` (string) is also available inside your script, 
+  containing the absolute path to the session workspace, though using relative paths is often simpler.
+
   Input is a single string 'code' containing the Python code to run.
   Output is a string containing the captured stdout and stderr.
   """
-  # This docstring is what the LLM sees.
-  # The actual execution logic is in run_python_code_logic,
-  # which will be called by the graph's tool_executor_node.
-  # The tool function itself just describes the tool for the LLM.
-  # The return here is just a placeholder as graph will call the logic function.
   return "Python code execution placeholder. Actual execution handled by the agent's tool node."

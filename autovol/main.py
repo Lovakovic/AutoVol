@@ -29,7 +29,6 @@ from .reporting import generate_report
 app = typer.Typer()
 
 
-# Helper to display script snippet
 def display_script_snippet(script_content: str, n_lines: int = 5) -> None:
   lines = script_content.splitlines()
   if not lines:
@@ -64,20 +63,36 @@ def analyze(
   print(f"Python script snippet lines: {snippet_lines}")
 
   if not os.path.exists(dump_path):
+    # This check is important, especially for the dump_path coming from user / docker volume
     print(f"\nError: Memory dump file not found at '{dump_path}'")
     raise typer.Exit(code=1)
-  if not os.getenv("VOLATILITY3_PATH"):
-    print("\nError: VOLATILITY3_PATH environment variable is not set.")
-    raise typer.Exit(code=1)
+  
+  # Removed VOLATILITY3_PATH check, as volatility_runner.py now defaults to 'vol' from PATH
+  # if not os.getenv("VOLATILITY3_PATH"):
+  #   print("\nError: VOLATILITY3_PATH environment variable is not set.")
+  #   raise typer.Exit(code=1)
+  
   if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    # This check is important for Vertex AI authentication
     print("\nError: GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.")
     print(f"       Please ensure it points to your Google Cloud service account JSON key file,")
     print(f"       or place '{VERTEX_KEY_FILENAME}' in the project root directory ('{PROJECT_ROOT}').")
+    print(f"       In Docker, this should be mounted to '/gcloud_key/vertex_key.json' and ENV var set.")
     raise typer.Exit(code=1)
 
   timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
   safe_dump_stem = "".join(c if c.isalnum() else '_' for c in Path(dump_path).stem)
   report_session_id = f"autovol_report_{safe_dump_stem}_{timestamp_str}"
+
+  report_session_base_dir = Path("reports") / report_session_id
+  try:
+    report_session_base_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Session directory created at: {report_session_base_dir}")
+    (report_session_base_dir / "workspace").mkdir(parents=True, exist_ok=True)
+    print(f"Session workspace directory ensured at: {report_session_base_dir / 'workspace'}")
+  except Exception as e:
+    print(f"Error creating session directory '{report_session_base_dir}': {e}")
+    raise typer.Exit(code=1)
 
   initial_state_dict: AppState = {
     "messages": [HumanMessage(content=context)],
@@ -101,121 +116,121 @@ def analyze(
   id_of_ai_message_content_streamed: Optional[str] = None
 
   try:
-    while True:  # Main agent interaction loop
-      if not isinstance(current_input_for_graph_stream, Command):  # Don't print for Command inputs
+    while True:
+      if not isinstance(current_input_for_graph_stream, Command):
         print(f"\n--- Agent Reasoning Cycle ---")
 
       should_continue_while_loop_after_this_cycle = False
       input_for_next_graph_cycle = None
-      Path("reports").mkdir(exist_ok=True)  # Ensure base reports dir exists
-
+      
       async_gen = app_graph.stream(
         current_input_for_graph_stream,
         config=config_for_stream,
-        stream_mode=["updates", "messages"]  # We need "updates" to get the __interrupt__ reliably
+        stream_mode=["updates", "messages"]
       )
 
-      # Process stream from the graph for one full pass or until an interrupt
       for i, raw_chunk_from_graph in enumerate(async_gen):
         current_graph_state_candidate = app_graph.get_state(config_for_stream)
-        if current_graph_state_candidate:  # Update our view of the latest full state
+        if current_graph_state_candidate:
           final_full_state_for_report = cast(AppState, current_graph_state_candidate.values)
 
         is_interrupt_chunk = False
-        interrupt_data_payload = None  # This will hold the tuple (InterruptObject, Checkpoint)
+        interrupt_data_payload = None
 
-        # Check if the raw_chunk_from_graph itself is the interrupt dictionary
         if isinstance(raw_chunk_from_graph, dict) and "__interrupt__" in raw_chunk_from_graph:
           is_interrupt_chunk = True
           interrupt_data_payload = raw_chunk_from_graph["__interrupt__"]
-        # Check if it's a tuple (stream_mode, data) and data contains interrupt
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name_for_interrupt_check, chunk_data_for_interrupt_check = raw_chunk_from_graph
           if stream_mode_name_for_interrupt_check == "updates" and \
             isinstance(chunk_data_for_interrupt_check, dict) and \
-            "__interrupt__" in chunk_data_for_interrupt_check:  # LangGraph usually puts __interrupt__ in the 'updates' part
+            "__interrupt__" in chunk_data_for_interrupt_check:
             is_interrupt_chunk = True
             interrupt_data_payload = chunk_data_for_interrupt_check["__interrupt__"]
 
         if is_interrupt_chunk:
-          should_continue_while_loop_after_this_cycle = True  # Signal that the outer loop should continue
-          if ai_content_was_streamed_for_current_ai_message:  # Newline after any streamed AI content
+          should_continue_while_loop_after_this_cycle = True
+          if ai_content_was_streamed_for_current_ai_message:
             print()
             ai_content_was_streamed_for_current_ai_message = False
             id_of_ai_message_content_streamed = None
 
-          if interrupt_data_payload is None:  # Should not happen if is_interrupt_chunk is True
+          if interrupt_data_payload is None:
             print("CRITICAL ERROR: is_interrupt_chunk is true but interrupt_data_payload is None.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Internal error processing interrupt structure."}
             )
-            break  # Break from this inner for-loop over stream chunks
+            break
 
-          # LangGraph's interrupt_data_payload is usually a tuple: (InterruptObject, CheckpointDict_or_None)
           if not isinstance(interrupt_data_payload, tuple) or not interrupt_data_payload:
             print("Error: __interrupt__ value is not a valid tuple.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt signal from graph"})
             break
 
-          interrupt_object = interrupt_data_payload[0]  # The Interrupt instance
+          interrupt_object = interrupt_data_payload[0]
           if not isinstance(interrupt_object, Interrupt):
             print(f"Error: __interrupt__ payload is not an Interrupt object, but {type(interrupt_object)}.")
             input_for_next_graph_cycle = Command(
               resume={"action": "internal_error_at_review", "reason": "Malformed interrupt payload type from graph"})
             break
 
-          interrupt_payload_from_graph_node = interrupt_object.value  # This is the dict from human_tool_review_node
+          interrupt_payload_from_graph_node = interrupt_object.value
           print("\n\n--- Agent Proposes Action: Human Input Required ---")
 
           tool_name_to_review = interrupt_payload_from_graph_node.get("tool_name", "unknown_tool")
-          # tool_args_to_review contains the *original* args proposed by LLM (e.g. LLM's code string)
           tool_args_to_review = interrupt_payload_from_graph_node.get("tool_call_args", {})
-          # temp_script_path_for_review is the path where agent.py saved the LLM's code
           temp_script_path_for_review = interrupt_payload_from_graph_node.get("temp_script_path")
-
-          user_decision_payload = {}  # This will be sent back in Command(resume=...)
+          user_decision_payload = {}
 
           if interrupt_payload_from_graph_node.get("error_condition"):
             error_reasoning_display = interrupt_payload_from_graph_node.get("reasoning_and_thinking",
                                                                             "Error: No specific reason provided for error condition.")
             print(f"Error condition from review node: {error_reasoning_display}")
             user_decision_payload = {"action": "internal_error_at_review", "reason": error_reasoning_display}
-          else:  # No error, proceed with normal review
+          else:
             if tool_name_to_review == "volatility_runner":
               plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
               plugin_args = tool_args_to_review.get('plugin_args', [])
               print()
               typer.echo(f"Proposed Volatility command: ", nl=False)
               typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
+              typer.echo("(This will run in the session workspace. If it outputs files, they will appear there.)")
 
             elif tool_name_to_review == "python_interpreter":
               print()
-              typer.secho(f"Proposed Python code to execute:", fg=typer.colors.YELLOW)
+              typer.secho(f"Proposed Python code to execute (will run in session workspace):", fg=typer.colors.YELLOW)
               original_python_code_from_llm = tool_args_to_review.get('code', '# No code provided by LLM')
-
               if temp_script_path_for_review and Path(temp_script_path_for_review).exists():
                 typer.echo(f"Script saved for review at: ", nl=False)
                 typer.secho(temp_script_path_for_review, fg=typer.colors.BLUE, underline=True)
                 try:
-                  # Read content from the temp file for snippet display
                   with open(temp_script_path_for_review, "r", encoding="utf-8") as f_script:
                     script_content_for_snippet = f_script.read()
                   display_script_snippet(script_content_for_snippet, n_lines=snippet_lines)
                 except Exception as e_read:
                   typer.secho(f" (Could not read script from temp file for snippet: {e_read})", fg=typer.colors.RED)
-                  # Fallback: display snippet from original LLM code if temp file read fails
                   display_script_snippet(original_python_code_from_llm, n_lines=snippet_lines)
               else:
                 typer.secho(
                   "(Script not saved to temp file or path unavailable, showing inline snippet from LLM proposal)",
                   fg=typer.colors.YELLOW)
                 display_script_snippet(original_python_code_from_llm, n_lines=snippet_lines)
-            else:  # Generic tool display
+            
+            elif tool_name_to_review == "list_workspace_files":
+                relative_path_arg = tool_args_to_review.get('relative_path', '.')
+                print()
+                typer.echo(f"Proposed action: List files in session workspace", nl=False)
+                if relative_path_arg != '.':
+                    typer.echo(f" (specifically path: ", nl=False)
+                    typer.secho(relative_path_arg, fg=typer.colors.YELLOW, nl=False)
+                    typer.echo(")")
+                else:
+                    typer.echo(" (root)")
+            else:
               typer.echo(f"Proposed action for tool '{tool_name_to_review}': ", nl=False)
               typer.secho(str(tool_args_to_review), fg=typer.colors.YELLOW)
 
-            # Common prompt for Approve, Modify, Deny
             while True:
               action_choice = typer.prompt("Approve (a), Modify (m), or Deny (d) the action?").lower()
               if action_choice in ['a', 'm', 'd']:
@@ -228,8 +243,8 @@ def analyze(
               denial_reason = typer.prompt("Reason for denial (optional, press Enter for default):",
                                            default="User denied without specific reason.", show_default=False)
               user_decision_payload = {"action": "deny", "reason": denial_reason}
-            elif action_choice == 'm':  # Modify action
-              modified_args_for_payload = {}  # This will hold the new tool args
+            elif action_choice == 'm':
+              modified_args_for_payload = {}
               if tool_name_to_review == "volatility_runner":
                 current_plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
                 current_plugin_args = tool_args_to_review.get('plugin_args', [])
@@ -244,7 +259,6 @@ def analyze(
                   "plugin_args": modified_plugin_args_list
                 }
               elif tool_name_to_review == "python_interpreter":
-                # Get the original code, either from temp file (if exists) or from LLM's proposal
                 code_to_edit = original_python_code_from_llm
                 if temp_script_path_for_review and Path(temp_script_path_for_review).exists():
                   try:
@@ -254,100 +268,89 @@ def analyze(
                     typer.secho(
                       f"Warning: Could not re-read {temp_script_path_for_review} for editing, using LLM's original code.",
                       fg=typer.colors.YELLOW)
-
                 edited_code_content = typer.edit(text=code_to_edit, extension=".py")
-
-                if edited_code_content is None:  # Editor closed without saving or error
+                if edited_code_content is None:
                   typer.secho("Editor closed or failed. Using original code for modification attempt.",
                               fg=typer.colors.YELLOW)
                   edited_code_content = code_to_edit
-                elif not edited_code_content.strip() and code_to_edit.strip():  # User deleted everything from non-empty original
+                elif not edited_code_content.strip() and code_to_edit.strip():
                   typer.secho("Editor returned empty content. Please provide some code or deny.", fg=typer.colors.RED)
-                  # Fallback to re-prompting or using original, here we use original
                   edited_code_content = code_to_edit
-
                 modified_args_for_payload = {"code": edited_code_content}
-              else:  # Generic tool modification (fallback)
+              elif tool_name_to_review == "list_workspace_files":
+                current_rel_path = tool_args_to_review.get('relative_path', '.')
+                modified_rel_path = typer.prompt(f"New relative path for listing (current: '{current_rel_path}')", default=current_rel_path)
+                modified_args_for_payload = {"relative_path": modified_rel_path}
+              else:
                 typer.echo(
                   f"Modification for tool '{tool_name_to_review}' using generic JSON edit (current: {tool_args_to_review}).",
                   err=True)
                 new_args_str = typer.prompt("Enter new JSON args string:", default=str(tool_args_to_review))
                 try:
-                  modified_args_for_payload = eval(new_args_str)  # Be cautious with eval
+                  modified_args_for_payload = eval(new_args_str)
                 except:
                   typer.echo("Invalid args format. Reverting to original.", err=True)
                   modified_args_for_payload = tool_args_to_review
-
               user_decision_payload = {
                 "action": "modify",
-                "modified_tool_args": modified_args_for_payload  # This contains the new args for the tool
+                "modified_tool_args": modified_args_for_payload
               }
-          # --- End of Approve/Modify/Deny logic ---
           input_for_next_graph_cycle = Command(resume=user_decision_payload)
-          break  # Crucial: Break from the inner for-loop (graph stream chunks) to process the Command
+          break
 
-        # --- Non-Interrupt Stream Chunk Handling (messages, updates) ---
         elif isinstance(raw_chunk_from_graph, tuple) and len(raw_chunk_from_graph) == 2:
           stream_mode_name, chunk_data = raw_chunk_from_graph
-          if stream_mode_name == "messages":  # LLM token streaming
+          if stream_mode_name == "messages":
             message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
             if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
-              if not ai_content_was_streamed_for_current_ai_message:  # First token for this AI message
-                print(f"AI: ", end="")  # Start "AI: " prefix
+              if not ai_content_was_streamed_for_current_ai_message:
+                print(f"AI: ", end="")
                 id_of_ai_message_content_streamed = message_chunk.id
-              print(message_chunk.content, end="", flush=True)  # Stream content
+              print(message_chunk.content, end="", flush=True)
               ai_content_was_streamed_for_current_ai_message = True
 
-          elif stream_mode_name == "updates":  # Graph state updates after a node runs
-            if not chunk_data:  # Empty update
+          elif stream_mode_name == "updates":
+            if not chunk_data:
               continue
-
-            # Example: chunk_data might be {'agent_node': {'messages': [AIMessage(...)]}}
-            # We need to print messages that haven't been shown yet.
             if final_full_state_for_report and "messages" in final_full_state_for_report:
               all_messages_now = final_full_state_for_report["messages"]
               new_messages_to_print = all_messages_now[num_messages_printed_for_cli:]
 
               if new_messages_to_print:
-                # If AI content was just streamed and this update is from the same agent node, add newline.
                 node_name_that_just_ran = list(chunk_data.keys())[0]
                 if ai_content_was_streamed_for_current_ai_message and \
                   node_name_that_just_ran == "agent" and \
                   new_messages_to_print and \
                   isinstance(new_messages_to_print[0], AIMessage) and \
                   new_messages_to_print[0].id == id_of_ai_message_content_streamed:
-                  print()  # Newline after streamed AI content from 'agent' node
+                  print()
 
                 for msg_idx, msg_to_print in enumerate(new_messages_to_print):
                   if isinstance(msg_to_print, AIMessage):
-                    # Was this AIMessage's content already streamed via "messages" mode?
                     content_already_streamed = (
                       ai_content_was_streamed_for_current_ai_message and
                       msg_to_print.id == id_of_ai_message_content_streamed
                     )
                     if content_already_streamed:
-                      # Content already printed. Reset flag for the *next* AI message.
                       ai_content_was_streamed_for_current_ai_message = False
                       id_of_ai_message_content_streamed = None
-                    else:  # Content not streamed (e.g., AIMessage from process_review_decision)
+                    else:
                       ai_text_content = ""
-                      if isinstance(msg_to_print.content, list):  # Handle block content
+                      if isinstance(msg_to_print.content, list):
                         for block in msg_to_print.content:
                           if isinstance(block, dict) and block.get("type") == "text":
                             ai_text_content += block.get("text", "") + "\n"
                       elif isinstance(msg_to_print.content, str):
                         ai_text_content = msg_to_print.content
-
                       if ai_text_content.strip():
                         print(f"AI: {ai_text_content.strip()}")
 
-                    # Always print tool call summary if present for this AIMessage
                     if msg_to_print.tool_calls:
                       tool_call_summary_parts = []
                       for tc in msg_to_print.tool_calls:
                         tc_tool_name = tc['name']
                         tc_args_dict = tc['args']
-                        summary_detail = f"Tool: {tc_tool_name}"  # Default summary
+                        summary_detail = f"Tool: {tc_tool_name}"
                         if tc_tool_name == "volatility_runner":
                           tc_plugin = tc_args_dict.get('plugin_name', 'N/A')
                           tc_plugin_args_list = tc_args_dict.get('plugin_args', [])
@@ -355,19 +358,21 @@ def analyze(
                           summary_detail = f"Volatility: {tc_plugin} {tc_plugin_args_str}".strip()
                         elif tc_tool_name == "python_interpreter":
                           summary_detail = "Python Code (details in log/review)"
+                        elif tc_tool_name == "list_workspace_files":
+                            rel_path = tc_args_dict.get('relative_path', '.')
+                            summary_detail = f"List Workspace Files (path: '{rel_path}')"
                         tool_call_summary_parts.append(summary_detail)
 
-                      # Newline before tool call if AI text was not streamed OR was empty
                       if not content_already_streamed or not msg_to_print.content or not str(
                         msg_to_print.content).strip():
                         print()
                       print(f"Tool Call Proposed: {', '.join(tool_call_summary_parts)}")
                       if not content_already_streamed or not msg_to_print.content or not str(
-                        msg_to_print.content).strip():  # Add another newline if there was no preceding AI text
+                        msg_to_print.content).strip():
                         print()
 
                   elif isinstance(msg_to_print, ToolMessage):
-                    print()  # Ensure separation
+                    print()
                     tool_output_for_cli = msg_to_print.content
                     max_tool_output_cli = 700
                     tool_name_for_display = msg_to_print.name if msg_to_print.name else msg_to_print.tool_call_id
@@ -377,41 +382,36 @@ def analyze(
                     print(f"Tool Result ({tool_name_for_display}):\n{tool_output_for_cli}")
                     print()
                   elif isinstance(msg_to_print, HumanMessage):
-                    # Print HumanMessage only if it's not the very first one (initial context)
                     if num_messages_printed_for_cli > 0 or msg_to_print is not all_messages_now[0]:
                       print(f"System/User Feedback: {msg_to_print.content}")
-                num_messages_printed_for_cli = len(all_messages_now)  # Update count
-          else:  # Unhandled stream mode
+                num_messages_printed_for_cli = len(all_messages_now)
+          else:
             print(f"Warning: Received chunk for unhandled stream mode: {stream_mode_name} with data: {chunk_data}")
-        else:  # Unrecognized chunk format from stream
+        else:
           print(f"Warning: Stream yielded an unrecognized chunk format: {raw_chunk_from_graph}")
-      # --- End of for-loop over stream chunks ---
 
-      if should_continue_while_loop_after_this_cycle:  # Interrupt was handled
-        if input_for_next_graph_cycle is None:  # Should have been set if interrupt occurred
+      if should_continue_while_loop_after_this_cycle:
+        if input_for_next_graph_cycle is None:
           print("CRITICAL ERROR: Interrupt was signaled, but no input_for_next_graph_cycle was set. Terminating.")
-          # No explicit StopIteration here, as we want to reach 'finally' for report
-          break  # Break the while True loop
+          break
         current_input_for_graph_stream = input_for_next_graph_cycle
-        continue  # To next iteration of the while True loop (main agent cycle)
-      else:  # Graph finished a full pass without an interrupt
-        if ai_content_was_streamed_for_current_ai_message:  # Ensure newline if last thing was streamed AI content
+        continue
+      else:
+        if ai_content_was_streamed_for_current_ai_message:
           print()
           ai_content_was_streamed_for_current_ai_message = False
           id_of_ai_message_content_streamed = None
         print("\n--- Analysis Concluded by Agent (or max recursion) ---")
-        break  # Exit the while True loop, proceed to 'finally'
-    # --- End of while True agent interaction loop ---
+        break
 
-  except Exception as e:  # Catch any unexpected errors during the while loop or stream processing
+  except Exception as e:
     print(f"\n--- An unexpected error occurred during agent execution ---")
     print(f"{type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-    # Let it fall through to 'finally' for report generation attempt
 
-  finally:  # Always try to generate a report
-    if ai_content_was_streamed_for_current_ai_message:  # Just in case of premature exit
+  finally:
+    if ai_content_was_streamed_for_current_ai_message:
       print()
     print("\n--- AutoVol Session Ended ---")
     if final_full_state_for_report and isinstance(final_full_state_for_report, dict):
@@ -426,11 +426,11 @@ def analyze(
       messages_in_final_state = final_full_state_for_report.get("messages", [])
       if isinstance(messages_in_final_state, list):
         for msg_obj in reversed(messages_in_final_state):
-          if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:  # Last non-tool-calling AIMessage
+          if isinstance(msg_obj, AIMessage) and not msg_obj.tool_calls:
             current_msg_text_parts = []
             if isinstance(msg_obj.content, str):
               current_msg_text_parts.append(msg_obj.content)
-            elif isinstance(msg_obj.content, list):  # Handle block content
+            elif isinstance(msg_obj.content, list):
               for _content_block in msg_obj.content:
                 if isinstance(_content_block, dict) and _content_block.get("type") == "text":
                   current_msg_text_parts.append(_content_block.get("text", ""))
@@ -454,7 +454,6 @@ def analyze(
         print("Reason: final_full_state_for_report was None.")
       elif not isinstance(final_full_state_for_report, dict):
         print(f"Reason: final_full_state_for_report was not a dictionary, type: {type(final_full_state_for_report)}")
-
 
 if __name__ == "__main__":
   app()
