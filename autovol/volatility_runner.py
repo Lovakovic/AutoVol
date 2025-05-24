@@ -141,7 +141,6 @@ def detect_profile(
                 if "windows" in plugin_to_try.lower() and "windows" in result.stdout.lower():
                     detected_os_base = "windows"
                     break
-                # ... (rest of detection logic unchanged)
                 elif "linux" in plugin_to_try.lower() and "linux" in result.stdout.lower():
                     detected_os_base = "linux"
                     break
