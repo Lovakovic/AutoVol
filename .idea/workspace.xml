@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Fix script execution">
+      <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RESET_MODE" value="MIXED" />
+    <option name="UPDATE_TYPE" value="REBASE" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Lovakovic&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Lovakovic/AutoVol.git&quot;,
+    &quot;accountId&quot;: &quot;6f99829c-8c2c-4a1c-84bb-f97faf70291f&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 5
+}</component>
+  <component name="ProjectId" id="2xBazrmS8sGouy6zHse2KXzqM8c" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "dockerize-volatility",
+    "junie.onboarding.icon.badge.shown": "true",
+    "last_opened_file_path": "/home/dario/Desktop/diplomski/AutoVol/sample_dumps",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/sample_dumps" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
+        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="" />
+      <created>1747414187613</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1747414187613</updated>
+      <workItem from="1747414189754" duration="4080000" />
+      <workItem from="1747666259881" duration="199000" />
+      <workItem from="1747666470079" duration="5921000" />
+      <workItem from="1747748476072" duration="7053000" />
+      <workItem from="1748074659679" duration="151000" />
+      <workItem from="1748074819721" duration="159000" />
+      <workItem from="1748104582858" duration="651000" />
+      <workItem from="1748277438342" duration="7626000" />
+    </task>
+    <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
+      <option name="closed" value="true" />
+      <created>1747416125512</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1747416125512</updated>
+    </task>
+    <task id="LOCAL-00002" summary="Add pythonInterpreter tool">
+      <option name="closed" value="true" />
+      <created>1747419427012</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1747419427012</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Docekrize the entire thing">
+      <option name="closed" value="true" />
+      <created>1747673456066</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1747673456066</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Docekrize the entire thing">
+      <option name="closed" value="true" />
+      <created>1748104594118</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1748104594118</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Docekrize the entire thing">
+      <option name="closed" value="true" />
+      <created>1748279778519</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1748279778519</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Fix script execution">
+      <option name="closed" value="true" />
+      <created>1748284889699</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1748284889699</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Add pythonInterpreter tool" />
+    <MESSAGE value="Docekrize the entire thing" />
+    <MESSAGE value="Fix script execution" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fix script execution" />
+  </component>
+</project>

@@ -15,7 +15,7 @@ services:
       - "./autovol_output:/app/reports"
 
     command: [
-      "/mnt/dump.mem", 
-      "--context", 
-      "List running processes and then list open network connections."
+      "/mnt/dump.mem",
+      "--context",
+      "This is a test of the help command. Just testing the help command for showing info about plugins.",
     ]
