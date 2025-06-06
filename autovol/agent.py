@@ -16,6 +16,7 @@ from .volatility_runner import (
 )
 from .python_interpreter import python_interpreter_tool, run_python_code_logic
 from .workspace_utils import list_workspace_files_tool, list_workspace_files_logic
+from .image_viewer import view_image_file_tool, view_image_file_logic
 from .prompts import SYSTEM_PROMPT_TEMPLATE
 
 DETECT_PROFILE_CALL_COUNT = 0
@@ -31,6 +32,8 @@ class AppState(TypedDict):
   investigation_log: List[Dict[str, Any]]
   last_user_review_decision: Optional[Dict]
   report_session_id: str
+  image_analysis_history: List[Dict[str, Any]]
+  multimodal_context: Dict[str, Any]
 
 
 llm = ChatVertexAI(
@@ -42,7 +45,8 @@ llm_with_tool = llm.bind_tools([
   volatility_runner_tool,
   python_interpreter_tool,
   list_workspace_files_tool,
-  get_volatility_plugin_help_tool
+  get_volatility_plugin_help_tool,
+  view_image_file_tool
 ])
 
 
@@ -324,6 +328,73 @@ def tool_executor_node(state: AppState) -> dict:
         tool_output_for_message_content) > 1000 else tool_output_for_message_content
     }
 
+  elif tool_name_called_by_llm == view_image_file_tool.name:
+    file_path_arg = tool_args.get("file_path")
+    analysis_prompt_arg = tool_args.get("analysis_prompt")
+    new_image_entry = None
+    
+    if not file_path_arg:
+      error_msg = "Error: 'file_path' missing in image viewer tool arguments from LLM."
+      tool_output_for_message_content = error_msg
+    else:
+      print(f"--- Executing Image Analysis: {file_path_arg} ---")
+      analysis_result = view_image_file_logic(
+        file_path=file_path_arg,
+        session_workspace_dir=str(session_workspace_path),
+        analysis_prompt=analysis_prompt_arg,
+        llm_instance=llm
+      )
+      
+      if analysis_result["success"]:
+        image_info = analysis_result["image_info"]
+        analysis_text = analysis_result["analysis_result"]
+        
+        tool_output_for_message_content = f"Image Analysis Results for '{file_path_arg}':\n\n"
+        
+        # Add image metadata
+        if image_info:
+          tool_output_for_message_content += f"**Image Metadata:**\n"
+          tool_output_for_message_content += f"- Format: {image_info.get('format', 'Unknown')}\n"
+          tool_output_for_message_content += f"- Dimensions: {image_info.get('dimensions', 'Unknown')}\n"
+          tool_output_for_message_content += f"- Size: {image_info.get('file_size_mb', 0):.2f} MB\n"
+          tool_output_for_message_content += f"- MIME Type: {image_info.get('mime_type', 'Unknown')}\n\n"
+        
+        # Add analysis results
+        tool_output_for_message_content += f"**Forensic Analysis:**\n{analysis_text}\n"
+        
+        # Prepare image analysis history entry
+        new_image_entry = {
+          "file_path": file_path_arg,
+          "analysis_prompt": analysis_prompt_arg,
+          "image_info": image_info,
+          "analysis_result": analysis_text,
+          "success": True
+        }
+        
+      else:
+        tool_output_for_message_content = f"Image Analysis Failed: {analysis_result['error_message']}"
+        new_image_entry = {
+          "file_path": file_path_arg,
+          "analysis_prompt": analysis_prompt_arg,
+          "error": analysis_result['error_message'],
+          "success": False
+        }
+    
+    # Prepare log entry
+    log_entry = {
+      "type": "tool_execution",
+      "tool_name": tool_name_called_by_llm,
+      "reasoning": reasoning_for_log,
+      "command": f"view_image_file: '{file_path_arg}'",
+      "tool_input": tool_args,
+      "output_file_path": None,
+      "workspace_output_file": None,
+      "output_details": tool_output_for_message_content[:1500] + "..." if len(
+        tool_output_for_message_content) > 1500 else tool_output_for_message_content,
+      "raw_output_preview_for_prompt": tool_output_for_message_content[:1000] + "..." if len(
+        tool_output_for_message_content) > 1000 else tool_output_for_message_content
+    }
+
   else:
     error_msg = f"Error: Unknown tool '{tool_name_called_by_llm}' called by LLM."
     tool_output_for_message_content = error_msg
@@ -339,12 +410,20 @@ def tool_executor_node(state: AppState) -> dict:
 
   current_log = state.get("investigation_log", [])
   new_log = current_log + [log_entry]
-
-  return {
+  
+  # Prepare return dict
+  return_dict = {
     "messages": [
       ToolMessage(content=tool_output_for_message_content, name=tool_name_called_by_llm, tool_call_id=tool_call["id"])],
     "investigation_log": new_log
   }
+  
+  # Add image analysis history if this was an image analysis
+  if tool_name_called_by_llm == view_image_file_tool.name and 'new_image_entry' in locals() and new_image_entry is not None:
+    current_image_history = state.get("image_analysis_history", [])
+    return_dict["image_analysis_history"] = current_image_history + [new_image_entry]
+  
+  return return_dict
 
 
 def detect_profile_node(state: AppState) -> dict:
@@ -481,13 +560,6 @@ def agent_node(state: AppState) -> dict:
   messages_for_llm = [SystemMessage(content=system_prompt_content)]
   # Add all non-SystemMessages from the current state to the history
   messages_for_llm.extend([m for m in current_messages if not isinstance(m, SystemMessage)])
-
-  # REMOVED Saving LLM Input to File
-  # REMOVED Console Debug Print of LLM Input (the verbose one)
-  # A simpler console log can be kept if desired:
-  print(
-    f"DEBUG: LLM Invocation {AGENT_NODE_CALL_COUNT}: Preparing to call LLM with {len(messages_for_llm)} total messages.")
-  print(f"DEBUG: Last 5 log entries sent to LLM:\n{investigation_log_summary_str}")
 
   response = llm_with_tool.invoke(messages_for_llm)
 

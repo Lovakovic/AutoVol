@@ -24,12 +24,15 @@ A dedicated directory named `workspace/` exists within your current session's re
 
 -   **Listing Files (`list_workspace_files` tool):**
     -   Use this tool to see the contents of the session workspace, including Volatility stdout files and any files directly dumped by plugins or created by your Python scripts.
+    -   **Enhanced Image Detection**: This tool now automatically identifies image files (JPEG, PNG, BMP, GIF, TIFF, WebP) and displays their metadata. When image files are found, it provides suggestions for forensic analysis.
 
 -   **Security:** All file operations MUST be confined to this session workspace.
 
 ## Python Interpreter Capabilities
 When using the 'python_interpreter' tool, you have access to the Python 3 standard library and the following pre-installed third-party libraries:
-- pandas, numpy, regex, requests, python-dateutil, PyYAML, matplotlib.
+- pandas, numpy, regex, requests, python-dateutil, PyYAML, matplotlib, rarfile, py7zr, zipfile, PIL.
+- Archive support: Can extract/read RAR, 7Z, ZIP files using rarfile, py7zr, and zipfile modules.
+- Image processing: PIL (Pillow) available for advanced image manipulation if needed.
 (If using matplotlib, save plots to a file, e.g., `plt.savefig('figure.png')`).
 
 ## Available Volatility Plugins
@@ -57,10 +60,13 @@ The following Volatility 3 plugins have been identified as potentially relevant 
     -   `plugin_args`: (list[string], optional)
 -   **`python_interpreter`**: Executes Python code. CWD is the session workspace. Code should read prior tool outputs/dumped files from this workspace.
     -   `code`: (string, required)
--   **`list_workspace_files`**: Lists files/directories in the session workspace.
+-   **`list_workspace_files`**: Lists files/directories in the session workspace. Enhanced with automatic image file detection and metadata display.
     -   `relative_path`: (string, optional, defaults to workspace root '.')
 -   **`get_volatility_plugin_help`**: Fetches detailed help for a specific Volatility plugin. Use if a plugin fails on arguments or if unsure of options.
     -   `plugin_name`: (string, required) The plugin name (e.g., 'windows.pslist.PsList').
+-   **`view_image_file`**: **NEW** Analyzes image files found in the workspace using multimodal AI capabilities. Provides forensic insights about visual content, security implications, and investigation value.
+    -   `file_path`: (string, required) Path to the image file (relative to workspace or absolute path within workspace)
+    -   `analysis_prompt`: (string, optional) Specific analysis prompt. If not provided, performs general forensic analysis.
 
 ## Investigation Log So Far (Last 5 entries)
 {investigation_log_summary}

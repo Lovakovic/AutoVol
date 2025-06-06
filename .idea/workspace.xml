@@ -4,8 +4,16 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Fix script execution">
+    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Docekrize the entire thing">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/prompts.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/prompts.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/python_interpreter.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/python_interpreter.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/workspace_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/workspace_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/next_up.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -58,7 +66,7 @@
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "dockerize-volatility",
     "junie.onboarding.icon.badge.shown": "true",
-    "last_opened_file_path": "/home/dario/Desktop/diplomski/AutoVol/sample_dumps",
+    "last_opened_file_path": "/home/dario/Desktop/diplomski/AutoVol/autovol_output/autovol_report_dump_2025-06-06_19-27-52/workspace",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -70,6 +78,7 @@
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/autovol_output/autovol_report_dump_2025-06-06_19-27-52/workspace" />
       <recent name="$PROJECT_DIR$/sample_dumps" />
     </key>
   </component>
@@ -96,6 +105,16 @@
       <workItem from="1748074819721" duration="159000" />
       <workItem from="1748104582858" duration="651000" />
       <workItem from="1748277438342" duration="7626000" />
+      <workItem from="1748453907956" duration="2000" />
+      <workItem from="1748612619543" duration="40000" />
+      <workItem from="1748612672484" duration="3135000" />
+      <workItem from="1748709743299" duration="3345000" />
+      <workItem from="1748760716135" duration="3515000" />
+      <workItem from="1748875671479" duration="27000" />
+      <workItem from="1748875706326" duration="66000" />
+      <workItem from="1748875782416" duration="1535000" />
+      <workItem from="1749227000119" duration="255000" />
+      <workItem from="1749227264542" duration="7001000" />
     </task>
     <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
       <option name="closed" value="true" />
