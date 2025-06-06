@@ -29,10 +29,26 @@ def run_python_code_logic(code: str, session_workspace_dir: Optional[str] = None
       print(f"Python interpreter CWD set to: {session_workspace_dir}")
     
     local_vars: Dict[str, Any] = {}
-    global_vars: Dict[str, Any] = {
-        '__builtins__': __builtins__,
-        'SESSION_WORKSPACE_DIR': str(Path(session_workspace_dir).resolve()) if session_workspace_dir else None
-    }
+    
+    # Import available modules, handling failures gracefully
+    available_modules = {'__builtins__': __builtins__}
+    
+    # Add session workspace directory
+    if session_workspace_dir:
+        available_modules['SESSION_WORKSPACE_DIR'] = str(Path(session_workspace_dir).resolve())
+    else:
+        available_modules['SESSION_WORKSPACE_DIR'] = None
+    
+    # Try to import standard/common modules
+    modules_to_import = ['io', 'pandas', 'numpy', 're', 'os', 'sys', 'json', 'datetime', 'matplotlib', 'rarfile', 'py7zr', 'zipfile', 'PIL']
+    for module_name in modules_to_import:
+        try:
+            available_modules[module_name] = __import__(module_name)
+        except ImportError:
+            # Module not available, skip it
+            pass
+    
+    global_vars: Dict[str, Any] = available_modules
 
     with contextlib.redirect_stdout(stdout_capture):
       with contextlib.redirect_stderr(stderr_capture):
@@ -61,7 +77,8 @@ def python_interpreter_tool(code: str) -> str:
   This means you can use relative paths to read files created by Volatility (e.g., 'dumped_file.bin')
   or to create new files (e.g., 'analysis_results.txt', 'my_plot.png').
   
-  Available libraries: pandas, numpy, regex, requests, python-dateutil, PyYAML, matplotlib.
+  Available libraries: pandas, numpy, regex, requests, python-dateutil, PyYAML, matplotlib, patoolib, rarfile, py7zr, zipfile.
+  Archive support: Can extract/read RAR, 7Z, ZIP files using patoolib, rarfile, py7zr, and zipfile modules.
   If using matplotlib, save plots to a file (e.g., plt.savefig('figure.png')) instead of plt.show().
   A global variable `SESSION_WORKSPACE_DIR` (string) is also available inside your script, 
   containing the absolute path to the session workspace, though using relative paths is often simpler.

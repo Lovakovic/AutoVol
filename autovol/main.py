@@ -102,7 +102,9 @@ def analyze(
     "available_plugins": None,
     "investigation_log": [],
     "last_user_review_decision": None,
-    "report_session_id": report_session_id
+    "report_session_id": report_session_id,
+    "image_analysis_history": [],
+    "multimodal_context": {}
   }
 
   thread_id = str(uuid.uuid4())

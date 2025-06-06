@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   autovol:
     build:
@@ -17,7 +15,8 @@ services:
       - "./autovol_output:/app/reports"
 
     command: [
-      "/mnt/dump.mem", 
-      "--context", 
-      "List running processes and then list open network connections."
+      "/mnt/dump.mem",
+      "--context",
+      "You're helping me test the image viewing tool. List the files in the workspace and view the iamge in it."
+#      "A sister's computer crashed and we have this memory dump. She was trying to draw something when a black window popped up and executed something, then the system crashed. Need to recover important files from the memory dump. This appears to be a forensic challenge with 3 flags to find.",
     ]

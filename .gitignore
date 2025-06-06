@@ -4,3 +4,5 @@
 /vertex_key.json
 /autovol_output/
 /gcloud_keys/
+/sample_dumps/
+/__pycache__/

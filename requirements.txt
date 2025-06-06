@@ -4,3 +4,7 @@ langgraph
 typer
 python-dotenv
 pydantic
+pandas
+rarfile
+py7zr
+Pillow
