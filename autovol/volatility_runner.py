@@ -184,6 +184,59 @@ class VolatilityPluginInput(BaseModel):
   plugin_name: str = Field(description="Full plugin name (e.g., 'windows.pslist.PsList').")
   plugin_args: Optional[List[str]] = Field(default=None, description="Optional args (e.g., ['--pid', '1234']). If the plugin dumps files (e.g. procdump, dumpfiles), it's best to use its native arguments like ['--dump-dir', '.'] to direct files into the session workspace. The main output of the plugin (stdout) will also be saved to a file in the workspace (e.g., 'vol_windows.pslist.PsList_output.txt') for your Python scripts to read.")
 
+def _create_smart_preview(output: str, max_chars: int = 15000, max_lines: int = 15) -> str:
+    """Create a smart preview showing first and last portions of output.
+    
+    Args:
+        output: The full output string
+        max_chars: Maximum characters to show from start and end (total will be 2x this)
+        max_lines: Maximum non-empty lines to show from start and end (total will be 2x this)
+    
+    Returns:
+        A preview string with first and last portions, or full output if small enough
+    """
+    # If output is small enough, return it as-is
+    if len(output) <= max_chars * 2:
+        return output
+    
+    # Split into lines and filter out empty lines
+    lines = output.splitlines()
+    non_empty_lines = [line for line in lines if line.strip()]
+    
+    # If we have few enough non-empty lines, return all
+    if len(non_empty_lines) <= max_lines * 2:
+        return output
+    
+    # Otherwise, create a smart preview
+    # First, try line-based approach
+    if len(non_empty_lines) > max_lines * 2:
+        first_lines = non_empty_lines[:max_lines]
+        last_lines = non_empty_lines[-max_lines:]
+        
+        first_part = '\n'.join(first_lines)
+        last_part = '\n'.join(last_lines)
+        
+        # Check if this fits within character limit
+        if len(first_part) + len(last_part) <= max_chars * 2:
+            total_lines = len(lines)
+            omitted_lines = total_lines - (max_lines * 2)
+            return f"{first_part}\n\n... [{omitted_lines} lines omitted] ...\n\n{last_part}"
+    
+    # Fall back to character-based approach
+    first_part = output[:max_chars]
+    last_part = output[-max_chars:]
+    
+    # Try to break at line boundaries for cleaner output
+    if '\n' in first_part:
+        first_part = first_part[:first_part.rfind('\n')]
+    if '\n' in last_part:
+        last_part = last_part[last_part.find('\n') + 1:]
+    
+    total_chars = len(output)
+    omitted_chars = total_chars - len(first_part) - len(last_part)
+    
+    return f"{first_part}\n\n... [{omitted_chars} characters omitted] ...\n\n{last_part}"
+
 def run_volatility_tool_logic(
     plugin_name: str,
     plugin_args: Optional[List[str]],
@@ -202,8 +255,11 @@ def run_volatility_tool_logic(
         session_workspace_dir=session_workspace_dir
     )
 
+    # Create a smart preview for the agent
+    stdout_preview = _create_smart_preview(stdout, max_chars=15000, max_lines=15)
+    
     result_dict = {
-        "stdout_preview": stdout[:1500] + "..." if len(stdout) > 1500 else stdout,
+        "stdout_preview": stdout_preview,
         "stderr": stderr,
         "return_code": return_code,
         "saved_workspace_stdout_file": saved_stdout_filename

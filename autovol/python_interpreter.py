@@ -1,6 +1,10 @@
 import io
 import os 
 import contextlib
+import re
+import sys
+import json
+from datetime import datetime
 from typing import Dict, Any, Optional
 from pathlib import Path 
 from pydantic import BaseModel, Field
@@ -28,8 +32,6 @@ def run_python_code_logic(code: str, session_workspace_dir: Optional[str] = None
       os.chdir(session_workspace_dir)
       print(f"Python interpreter CWD set to: {session_workspace_dir}")
     
-    local_vars: Dict[str, Any] = {}
-    
     # Import available modules, handling failures gracefully
     available_modules = {'__builtins__': __builtins__}
     
@@ -39,20 +41,31 @@ def run_python_code_logic(code: str, session_workspace_dir: Optional[str] = None
     else:
         available_modules['SESSION_WORKSPACE_DIR'] = None
     
-    # Try to import standard/common modules
-    modules_to_import = ['io', 'pandas', 'numpy', 're', 'os', 'sys', 'json', 'datetime', 'matplotlib', 'rarfile', 'py7zr', 'zipfile', 'PIL']
-    for module_name in modules_to_import:
-        try:
-            available_modules[module_name] = __import__(module_name)
-        except ImportError:
-            # Module not available, skip it
-            pass
+    # Only pre-import essential modules that need to be available
+    # Let users import libraries themselves with their preferred aliases
+    essential_modules = {
+        'os': os,
+        'sys': sys,
+        'io': io,
+        're': re,
+        'json': json,
+        'datetime': datetime,
+        'pathlib': Path
+    }
     
-    global_vars: Dict[str, Any] = available_modules
+    global_vars: Dict[str, Any] = {
+        '__builtins__': __builtins__,
+        'SESSION_WORKSPACE_DIR': available_modules.get('SESSION_WORKSPACE_DIR'),
+        **essential_modules
+    }
 
+    # Use a single namespace for both globals and locals to avoid import issues
+    # This allows imports to work properly in all contexts
+    exec_namespace = global_vars.copy()
+    
     with contextlib.redirect_stdout(stdout_capture):
       with contextlib.redirect_stderr(stderr_capture):
-        exec(code, global_vars, local_vars)
+        exec(code, exec_namespace, exec_namespace)
 
     result_stdout = stdout_capture.getvalue()
     result_stderr = stderr_capture.getvalue()

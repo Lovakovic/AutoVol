@@ -17,6 +17,5 @@ services:
     command: [
       "/mnt/dump.mem",
       "--context",
-      "You're helping me test the image viewing tool. List the files in the workspace and view the iamge in it."
-#      "A sister's computer crashed and we have this memory dump. She was trying to draw something when a black window popped up and executed something, then the system crashed. Need to recover important files from the memory dump. This appears to be a forensic challenge with 3 flags to find.",
+      "A user's computer crashed unexpectedly and we have obtained a memory dump for analysis. The user reports seeing a black window pop up with something being executed just before the crash. At the time of the crash, the user was working on a drawing application. Our objective is to recover important files from the system and understand what caused the crash. Please conduct a thorough analysis focusing on: 1) Identifying the process associated with the black window that appeared before the crash, 2) Locating and extracting any important user files, particularly those related to drawing or creative work, 3) Determining what was being executed in the suspicious black window, 4) Finding any forensic artifacts that could explain the crash. Note: This investigation should uncover 3 specific flags hidden within the memory dump. Please document all findings, recovered files, and the 3 flags in your analysis.",
     ]

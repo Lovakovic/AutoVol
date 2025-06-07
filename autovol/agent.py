@@ -188,7 +188,7 @@ def tool_executor_node(state: AppState) -> dict:
       tool_output_for_message_content = (
         f"Plugin '{plugin_name_from_llm}' executed (RC={return_code}).\n"
         f"Full standard output saved to workspace file: '{saved_workspace_stdout_file}'\n"
-        f"Output Preview (first 1500 chars):\n```\n{stdout_preview}\n```\n"
+        f"Output Preview:\n```\n{stdout_preview}\n```\n"
       )
       if stderr_content.strip():
         tool_output_for_message_content += f"Stderr (if any):\n```\n{stderr_content}\n```\n"
