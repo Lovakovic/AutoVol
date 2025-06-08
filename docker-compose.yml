@@ -8,6 +8,9 @@ services:
     
     stdin_open: true # Equivalent to docker run -i
     tty: true        # Equivalent to docker run -t
+    
+    env_file:
+      - .env
 
     volumes:
       - "./sample_dumps/test_dump.mem:/mnt/dump.mem:ro" 

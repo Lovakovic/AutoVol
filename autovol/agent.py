@@ -4,6 +4,8 @@ from typing import List, Optional, Dict, Annotated, TypedDict, Sequence, Any
 from datetime import datetime
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_google_vertexai import ChatVertexAI
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
@@ -42,11 +44,30 @@ class AppState(TypedDict):
   token_usage: Dict[str, int]  # Track input_tokens, output_tokens, total_tokens
 
 
-llm = ChatVertexAI(
-  model="gemini-2.5-pro-preview-05-06",
-  temperature=0.7,
-  max_output_tokens=8000,
+# Gemini configuration
+# llm = ChatVertexAI(
+#   model="gemini-2.5-pro-preview-05-06",
+#   temperature=0.7,
+#   max_output_tokens=8000,
+# )
+
+# Claude configuration
+# llm = ChatAnthropic(
+#   model="claude-sonnet-4-20250514",
+#   max_tokens=32000,
+#   thinking={"type": "enabled", "budget_tokens": 4000},
+#   api_key=os.getenv("ANTHROPIC_API_KEY")
+# )
+
+
+# OpenAI configuration
+reasoning = {
+    "effort": "medium"  # 'low', 'medium', or 'high'
+}
+llm = ChatOpenAI(
+    model="o4-mini", use_responses_api=True, model_kwargs={"reasoning": reasoning}
 )
+
 llm_with_tool = llm.bind_tools([
   volatility_runner_tool,
   python_interpreter_tool,
@@ -58,70 +79,80 @@ llm_with_tool = llm.bind_tools([
 
 def _extract_reasoning_from_ai_message(ai_message: AIMessage) -> str:
   reasoning_parts = []
-  # Attempt to get structured thinking if available (e.g., Claude's approach)
-  if hasattr(ai_message, 'response_metadata'):
-    # Note: 'claude-messages-thinking' is specific to Anthropic's Claude via some Langchain integrations.
-    # Gemini might have a different key or not provide this structured thinking log directly
-    # in response_metadata in the same way. This part might need adjustment if a similar
-    # Gemini-specific metadata key for reasoning/thinking steps is identified.
-    # For now, it's a good placeholder if you switch models or if future Gemini versions expose this.
-    thinking_log_key = 'claude-messages-thinking'  # Example key
-    if thinking_log_key in ai_message.response_metadata:
-      thinking_log = ai_message.response_metadata[thinking_log_key]
-      if isinstance(thinking_log, list) and thinking_log:
-        thinking_content = "\n".join(
-          [step.get('thinking', '') if isinstance(step, dict) else str(step) for step in thinking_log if
-           (isinstance(step, dict) and step.get('thinking')) or isinstance(step, str)]
-        )
-        if thinking_content.strip():
-          reasoning_parts.append("LLM Thinking Process (from metadata):\n" + thinking_content.strip())
-      elif isinstance(thinking_log, str) and thinking_log.strip():
-        reasoning_parts.append("LLM Thinking Process (from metadata):\n" + thinking_log.strip())
-
-  # General approach for Gemini and other models: parse content blocks
+  
+  # Check if we're using Anthropic (Claude)
+  is_anthropic = isinstance(llm, ChatAnthropic)
+  
+  # First try to extract thinking from content blocks (Anthropic's format)
   thinking_from_content_blocks = []
   text_from_content_blocks = []
-
+  
   if isinstance(ai_message.content, list):  # Handles models outputting a list of content blocks
     for block in ai_message.content:
       if isinstance(block, dict):
-        if block.get("type") == "thinking":  # A hypothetical "thinking" block type
-          if block.get("thinking"):
-            thinking_from_content_blocks.append(str(block["thinking"]))
-        elif block.get("type") == "text":  # Standard text block
-          if block.get("text"):
-            text_from_content_blocks.append(str(block["text"]))
+        # Anthropic's thinking blocks have type='thinking' with 'thinking' field
+        if block.get("type") == "thinking" and block.get("thinking"):
+          thinking_from_content_blocks.append(str(block["thinking"]))
+        # Standard text blocks
+        elif block.get("type") == "text" and block.get("text"):
+          text_from_content_blocks.append(str(block["text"]))
+        # Tool use blocks (for completeness)
+        elif block.get("type") == "tool_use":
+          # Tool calls are handled separately, don't include in reasoning
+          pass
       # If a block is just a string (less common for structured outputs but possible)
       elif isinstance(block, str):
         text_from_content_blocks.append(block)
   elif isinstance(ai_message.content, str):  # Handles models outputting a single string content
     text_from_content_blocks.append(ai_message.content)
-
+  
+  # If we found thinking blocks (from Anthropic), prioritize those
   if thinking_from_content_blocks:
     reasoning_parts.append(
-      "LLM Thinking (from content block):\n" + "\n".join(filter(None, thinking_from_content_blocks)))
-
+      "LLM Thinking Process:\n" + "\n".join(filter(None, thinking_from_content_blocks)))
+  
+  # For non-Anthropic models or when no thinking blocks found, check response_metadata
+  if not thinking_from_content_blocks and hasattr(ai_message, 'response_metadata'):
+    # Check for any thinking-related keys in metadata
+    metadata = ai_message.response_metadata
+    
+    # Try various possible keys for thinking/reasoning
+    thinking_keys = ['claude-messages-thinking', 'thinking', 'reasoning', 'thought_process']
+    for key in thinking_keys:
+      if key in metadata:
+        thinking_log = metadata[key]
+        if isinstance(thinking_log, list) and thinking_log:
+          thinking_content = "\n".join(
+            [step.get('thinking', '') if isinstance(step, dict) else str(step) for step in thinking_log if
+             (isinstance(step, dict) and step.get('thinking')) or isinstance(step, str)]
+          )
+          if thinking_content.strip():
+            reasoning_parts.append("LLM Thinking Process (from metadata):\n" + thinking_content.strip())
+            break
+        elif isinstance(thinking_log, str) and thinking_log.strip():
+          reasoning_parts.append("LLM Thinking Process (from metadata):\n" + thinking_log.strip())
+          break
+  
   # Add primary text content, ensuring it's not just re-adding thinking parts
   if text_from_content_blocks:
     combined_text = "\n".join(filter(None, text_from_content_blocks)).strip()
     if combined_text:
-      # Check if this combined_text is already largely captured in reasoning_parts
-      # This is a heuristic to avoid duplication if thinking_parts already included the main text.
-      is_new_text = True
-      for part in reasoning_parts:
-        if combined_text in part:  # If the text is a substring of an existing reasoning part
-          is_new_text = False
-          break
-      if is_new_text:
+      # For Anthropic, if we already have thinking blocks, only add text if it's substantial
+      if thinking_from_content_blocks:
+        # Only add text content if it provides additional context beyond thinking
+        if len(combined_text) > 50:  # Arbitrary threshold for "substantial"
+          reasoning_parts.append("Response:\n" + combined_text)
+      else:
+        # For non-Anthropic or when no thinking found, include all text
         reasoning_parts.append(combined_text)
-
+  
   # Fallback if no specific reasoning/thinking found, use the main content string
   if not reasoning_parts and isinstance(ai_message.content, str) and ai_message.content.strip():
     reasoning_parts.append(ai_message.content.strip())
-
+  
   if not reasoning_parts:  # If truly nothing, give a default
     return "No detailed reasoning extracted. Main AI response content considered as reasoning if available."
-
+  
   return "\n---\n".join(reasoning_parts)
 
 
@@ -641,7 +672,7 @@ def agent_node(state: AppState) -> dict:
   
   # Final safety check - total context size
   total_context_size = sum(len(str(msg.content)) for msg in messages_for_llm)
-  MAX_TOTAL_CONTEXT = 1500000  # 1.5MB total context limit (conservative for Gemini)
+  MAX_TOTAL_CONTEXT = 1500000  # 1.5MB total context limit (conservative for most models)
   
   if total_context_size > MAX_TOTAL_CONTEXT:
     print(f"ERROR: Total context size ({total_context_size:,} chars) exceeds safety limit ({MAX_TOTAL_CONTEXT:,} chars)")
@@ -727,7 +758,7 @@ def agent_node(state: AppState) -> dict:
     
     # Check for common issues
     if total_length > 1000000:  # 1MB is a rough estimate
-      print("\nWARNING: Total content length is very large. This might exceed Gemini's context window.")
+      print("\nWARNING: Total content length is very large. This might exceed the model's context window.")
     
     if len(messages_for_llm) > 100:
       print("\nWARNING: Large number of messages. Consider implementing message pruning.")
@@ -739,16 +770,33 @@ def agent_node(state: AppState) -> dict:
   current_token_usage = state.get("token_usage", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
   
   if hasattr(response, 'response_metadata') and response.response_metadata:
+    # Gemini uses 'usage_metadata'
     usage_stats = response.response_metadata.get('usage_metadata', {})
+    
+    # Claude uses 'usage' directly in response_metadata
+    if not usage_stats:
+      usage_stats = response.response_metadata.get('usage', {})
+    
+    # OpenAI also uses 'token_usage' or 'usage'
+    if not usage_stats:
+      usage_stats = response.response_metadata.get('token_usage', {})
+    
     if usage_stats:
-      # Update token counts
-      current_token_usage["input_tokens"] += usage_stats.get('input_tokens', 0)
-      current_token_usage["output_tokens"] += usage_stats.get('output_tokens', 0)
-      current_token_usage["total_tokens"] += usage_stats.get('total_tokens', 0)
+      # Different providers use different key names
+      # Gemini/Claude: input_tokens, output_tokens
+      # OpenAI: prompt_tokens, completion_tokens
+      input_tokens = usage_stats.get('input_tokens', 0) or usage_stats.get('prompt_tokens', 0)
+      output_tokens = usage_stats.get('output_tokens', 0) or usage_stats.get('completion_tokens', 0)
+      total_tokens = usage_stats.get('total_tokens', 0) or (input_tokens + output_tokens)
       
-      print(f"Token usage for this call - Input: {usage_stats.get('input_tokens', 0)}, "
-            f"Output: {usage_stats.get('output_tokens', 0)}, "
-            f"Total: {usage_stats.get('total_tokens', 0)}")
+      # Update token counts
+      current_token_usage["input_tokens"] += input_tokens
+      current_token_usage["output_tokens"] += output_tokens
+      current_token_usage["total_tokens"] += total_tokens
+      
+      print(f"Token usage for this call - Input: {input_tokens}, "
+            f"Output: {output_tokens}, "
+            f"Total: {total_tokens}")
 
   # REMOVED Saving LLM Response to File
 
@@ -928,8 +976,23 @@ def process_human_review_decision_node(state: AppState) -> dict:
       # If the agent re-proposes the same thing, the user can deny.
       # To be safer and force agent re-plan:
       if ai_message_that_was_reviewed:
+        # Clean content for Anthropic format - remove tool_use blocks
+        cleaned_content = original_ai_content
+        if isinstance(original_ai_content, list):
+          # For Anthropic's list format, filter out tool_use blocks
+          cleaned_content = []
+          for block in original_ai_content:
+            if isinstance(block, dict) and block.get("type") in ["text", "thinking"]:
+              # Keep only text and thinking blocks
+              cleaned_content.append(block)
+          # If no text/thinking blocks remain, provide a default
+          if not cleaned_content:
+            cleaned_content = "User modification invalid. Re-evaluating."
+        elif not original_ai_content:
+          cleaned_content = "User modification invalid. Re-evaluating."
+          
         ai_message_no_tool = AIMessage(
-          content=original_ai_content if original_ai_content else "User modification invalid. Re-evaluating.",
+          content=cleaned_content,
           tool_calls=[],  # Strip tool calls
           id=original_ai_message_id,
           response_metadata=original_ai_response_metadata
@@ -971,8 +1034,23 @@ def process_human_review_decision_node(state: AppState) -> dict:
         HumanMessage(content="System Error: Deny action chosen, original AI context lost. Agent to re-evaluate."))
       log_updates.append({**log_entry_base, "output_details": "System error during denial."})
     else:
+      # Clean content for Anthropic format - remove tool_use blocks
+      cleaned_content = original_ai_content
+      if isinstance(original_ai_content, list):
+        # For Anthropic's list format, filter out tool_use blocks
+        cleaned_content = []
+        for block in original_ai_content:
+          if isinstance(block, dict) and block.get("type") in ["text", "thinking"]:
+            # Keep only text and thinking blocks
+            cleaned_content.append(block)
+        # If no text/thinking blocks remain, provide a default
+        if not cleaned_content:
+          cleaned_content = "Tool call denied by user. Reconsidering."
+      elif not original_ai_content:
+        cleaned_content = "Tool call denied by user. Reconsidering."
+      
       ai_message_no_tool = AIMessage(
-        content=original_ai_content if original_ai_content else "Tool call denied by user. Reconsidering.",
+        content=cleaned_content,
         tool_calls=[],
         id=original_ai_message_id,
         response_metadata=original_ai_response_metadata

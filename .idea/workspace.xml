@@ -4,14 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Docekrize the entire thing">
+    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Truncate long contents">
+      <change afterPath="$PROJECT_DIR$/MODEL_SWITCHING.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/autovol/image_viewer.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/image_viewer.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/autovol/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/autovol/python_interpreter.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/python_interpreter.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/autovol/reporting.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/reporting.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -47,6 +46,9 @@
     &quot;accountId&quot;: &quot;6f99829c-8c2c-4a1c-84bb-f97faf70291f&quot;
   }
 }</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/.venv/lib/python3.12/site-packages/langchain_openai/chat_models/base.py" root0="SKIP_INSPECTION" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 5
@@ -115,7 +117,7 @@
       <workItem from="1749227264542" duration="7001000" />
       <workItem from="1749277075541" duration="8106000" />
       <workItem from="1749291172480" duration="2237000" />
-      <workItem from="1749375315542" duration="2859000" />
+      <workItem from="1749375315542" duration="12319000" />
     </task>
     <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
       <option name="closed" value="true" />
@@ -165,7 +167,15 @@
       <option name="project" value="LOCAL" />
       <updated>1748284889699</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="Truncate long contents">
+      <option name="closed" value="true" />
+      <created>1749378219851</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1749378219851</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -186,6 +196,7 @@
     <MESSAGE value="Add pythonInterpreter tool" />
     <MESSAGE value="Docekrize the entire thing" />
     <MESSAGE value="Fix script execution" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fix script execution" />
+    <MESSAGE value="Truncate long contents" />
+    <option name="LAST_COMMIT_MESSAGE" value="Truncate long contents" />
   </component>
 </project>

@@ -1,5 +1,7 @@
 langchain-core
 langchain-google-vertexai
+langchain-anthropic
+langchain-openai
 langgraph
 typer
 python-dotenv

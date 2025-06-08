@@ -195,6 +195,9 @@ def analyze(
             if tool_name_to_review == "volatility_runner":
               plugin_name = tool_args_to_review.get('plugin_name', 'N/A')
               plugin_args = tool_args_to_review.get('plugin_args', [])
+              # Ensure plugin_args is a list, not None
+              if plugin_args is None:
+                plugin_args = []
               print()
               typer.echo(f"Proposed Volatility command: ", nl=False)
               typer.secho(f"{plugin_name} {' '.join(plugin_args)}", fg=typer.colors.YELLOW)
@@ -306,11 +309,25 @@ def analyze(
           if stream_mode_name == "messages":
             message_chunk, metadata = cast(tuple[BaseMessage, dict], chunk_data)
             if isinstance(message_chunk, AIMessage) and hasattr(message_chunk, 'content') and message_chunk.content:
-              if not ai_content_was_streamed_for_current_ai_message:
-                print(f"AI: ", end="")
-                id_of_ai_message_content_streamed = message_chunk.id
-              print(message_chunk.content, end="", flush=True)
-              ai_content_was_streamed_for_current_ai_message = True
+              # Extract text content from the message chunk
+              text_to_stream = ""
+              if isinstance(message_chunk.content, list):
+                # Handle Anthropic's list format with content blocks
+                for block in message_chunk.content:
+                  if isinstance(block, dict):
+                    # Only stream text blocks, not thinking blocks
+                    if block.get("type") == "text" and block.get("text"):
+                      text_to_stream += block.get("text", "")
+              elif isinstance(message_chunk.content, str):
+                # Handle simple string content (Gemini/OpenAI format)
+                text_to_stream = message_chunk.content
+              
+              if text_to_stream:
+                if not ai_content_was_streamed_for_current_ai_message:
+                  print(f"AI: ", end="")
+                  id_of_ai_message_content_streamed = message_chunk.id
+                print(text_to_stream, end="", flush=True)
+                ai_content_was_streamed_for_current_ai_message = True
 
           elif stream_mode_name == "updates":
             if not chunk_data:
