@@ -4,13 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Truncate long contents">
-      <change afterPath="$PROJECT_DIR$/MODEL_SWITCHING.md" afterDir="false" />
+    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Add other models">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/autovol/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -117,7 +113,7 @@
       <workItem from="1749227264542" duration="7001000" />
       <workItem from="1749277075541" duration="8106000" />
       <workItem from="1749291172480" duration="2237000" />
-      <workItem from="1749375315542" duration="12319000" />
+      <workItem from="1749375315542" duration="14912000" />
     </task>
     <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
       <option name="closed" value="true" />
@@ -175,7 +171,15 @@
       <option name="project" value="LOCAL" />
       <updated>1749378219851</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Add other models">
+      <option name="closed" value="true" />
+      <created>1749392736061</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1749392736061</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -197,6 +201,7 @@
     <MESSAGE value="Docekrize the entire thing" />
     <MESSAGE value="Fix script execution" />
     <MESSAGE value="Truncate long contents" />
-    <option name="LAST_COMMIT_MESSAGE" value="Truncate long contents" />
+    <MESSAGE value="Add other models" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add other models" />
   </component>
 </project>

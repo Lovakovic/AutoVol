@@ -45,11 +45,11 @@ class AppState(TypedDict):
 
 
 # Gemini configuration
-# llm = ChatVertexAI(
-#   model="gemini-2.5-pro-preview-05-06",
-#   temperature=0.7,
-#   max_output_tokens=8000,
-# )
+llm = ChatVertexAI(
+  model="gemini-2.5-pro-preview-05-06",
+  temperature=0.7,
+  max_output_tokens=8000,
+)
 
 # Claude configuration
 # llm = ChatAnthropic(
@@ -61,12 +61,12 @@ class AppState(TypedDict):
 
 
 # OpenAI configuration
-reasoning = {
-    "effort": "medium"  # 'low', 'medium', or 'high'
-}
-llm = ChatOpenAI(
-    model="o4-mini", use_responses_api=True, model_kwargs={"reasoning": reasoning}
-)
+# reasoning = {
+#     "effort": "medium"  # 'low', 'medium', or 'high'
+# }
+# llm = ChatOpenAI(
+#     model="o4-mini", use_responses_api=True, model_kwargs={"reasoning": reasoning}
+# )
 
 llm_with_tool = llm.bind_tools([
   volatility_runner_tool,

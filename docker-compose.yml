@@ -20,16 +20,43 @@ services:
     command: [
       "/mnt/dump.mem",
       "--context",
-      "You are analyzing a memory dump from a computer that crashed unexpectedly. According to the user (who mentioned it was their sister's computer), they witnessed a black command window appear with something being executed shortly before the crash occurred. At the time of the incident, the user was actively drawing something on the computer. 
+      "You are analyzing a memory dump from a workstation where an intrusion detection system has alerted to suspicious behavior, indicating a likely malware intrusion. This memory dump has been taken for forensic analysis.
 
-      Your objectives are to:
-      1) Identify what was running in the black window that appeared before the crash
-      2) Recover any important files from the system, particularly any that the user might consider valuable
-      3) Investigate what the user was drawing at the time of the crash
-      4) Determine if there are any compressed/archived files that might contain important data
-      5) Look for any user credentials or authentication artifacts that might be relevant
-
-      This is a CTF-style investigation with 3 specific flags hidden within the memory dump that need to be discovered. Each flag follows the format: flag{...}
-
-      Please conduct a systematic analysis starting with basic system profiling, then examine running processes, and investigate any suspicious or notable findings. Document your analysis process, findings, and any flags discovered."
+      Your investigation objectives are to:
+      
+      1) **Process Analysis**: Identify the process responsible for the suspicious activity
+         - Find the name of the malicious process
+         - Determine the exact path of the executable for this process
+      
+      2) **Network Analysis**: Investigate the malware's communication strategy
+         - Identify any IP addresses the malware attempted to connect to
+         - Find domains associated with the malware's network activity
+         - Note: The geographical location (city) of IP addresses may be relevant
+      
+      3) **Malware Analysis**: Extract forensic artifacts about the malware
+         - Calculate the SHA1 hash of the malware executable
+         - Determine the compilation timestamp of the malware
+         - Look for any other IOCs (Indicators of Compromise)
+      
+      4) **System Impact**: Document any changes or suspicious activities
+         - Check for persistence mechanisms
+         - Look for any data exfiltration attempts
+         - Identify any system modifications
+      
+      This is a real malware incident investigation. Please conduct a systematic analysis starting with:
+      - System profiling and OS detection
+      - Process listing and analysis
+      - Network connections examination
+      - File system artifacts
+      - Registry analysis (if Windows)
+      
+      Focus on finding concrete evidence that answers:
+      - What is the malicious process name?
+      - What is its executable path?
+      - What IP address did it connect to?
+      - What domain is associated with the malware?
+      - What is the SHA1 hash of the malware?
+      - When was the malware compiled?
+      
+      Document all findings with supporting evidence from the memory dump."
     ]
