@@ -6,8 +6,11 @@
   <component name="ChangeListManager">
     <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Docekrize the entire thing">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/image_viewer.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/image_viewer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/autovol/python_interpreter.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/python_interpreter.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/reporting.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/reporting.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -112,6 +115,7 @@
       <workItem from="1749227264542" duration="7001000" />
       <workItem from="1749277075541" duration="8106000" />
       <workItem from="1749291172480" duration="2237000" />
+      <workItem from="1749375315542" duration="2859000" />
     </task>
     <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
       <option name="closed" value="true" />

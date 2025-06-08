@@ -57,7 +57,7 @@ def analyze_image_with_llm(
     image_path: str,
     analysis_prompt: str,
     llm: ChatVertexAI
-) -> str:
+) -> tuple[str, Dict[str, int]]:
     """
     Perform direct multimodal LLM invocation for image analysis.
     
@@ -67,7 +67,7 @@ def analyze_image_with_llm(
         llm: ChatVertexAI instance
         
     Returns:
-        Analysis result from the LLM
+        Tuple of (analysis result from the LLM, token usage dict)
         
     Raises:
         ValueError: If analysis fails
@@ -75,7 +75,17 @@ def analyze_image_with_llm(
     try:
         multimodal_message = create_multimodal_message(analysis_prompt, image_path)
         response = llm.invoke([multimodal_message])
-        return response.content
+        
+        # Extract token usage if available
+        token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        if hasattr(response, 'response_metadata') and response.response_metadata:
+            usage_stats = response.response_metadata.get('usage_metadata', {})
+            if usage_stats:
+                token_usage["input_tokens"] = usage_stats.get('input_tokens', 0)
+                token_usage["output_tokens"] = usage_stats.get('output_tokens', 0)
+                token_usage["total_tokens"] = usage_stats.get('total_tokens', 0)
+        
+        return response.content, token_usage
         
     except Exception as e:
         raise ValueError(f"Image analysis failed: {str(e)}")
@@ -173,17 +183,19 @@ Please be thorough but concise in your analysis."""
         # Perform LLM analysis if instance provided
         if llm_instance:
             try:
-                analysis_result = analyze_image_with_llm(
+                analysis_result, token_usage = analyze_image_with_llm(
                     str(resolved_path),
                     analysis_prompt,
                     llm_instance
                 )
                 result["analysis_result"] = analysis_result
+                result["token_usage"] = token_usage
             except Exception as e:
                 result["error_message"] = f"LLM analysis failed: {str(e)}"
                 return result
         else:
             result["analysis_result"] = "Image validated and ready for analysis. No LLM instance provided for analysis."
+            result["token_usage"] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         
         result["success"] = True
         

@@ -1,6 +1,7 @@
 import os
 import uuid
 from typing import List, Optional, Dict, Annotated, TypedDict, Sequence, Any
+from datetime import datetime
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph, END, START
@@ -22,6 +23,10 @@ from .prompts import SYSTEM_PROMPT_TEMPLATE
 DETECT_PROFILE_CALL_COUNT = 0
 AGENT_NODE_CALL_COUNT = 0  # Can be kept for console call count or removed
 
+# Configuration for message history management
+MAX_MESSAGES_IN_CONTEXT = int(os.getenv("AUTOVOL_MAX_MESSAGES", "60"))  # Default to 50 messages
+KEEP_LAST_N_MESSAGES = int(os.getenv("AUTOVOL_KEEP_LAST_N", "30"))  # When trimming, keep last 30
+
 
 class AppState(TypedDict):
   messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -34,6 +39,7 @@ class AppState(TypedDict):
   report_session_id: str
   image_analysis_history: List[Dict[str, Any]]
   multimodal_context: Dict[str, Any]
+  token_usage: Dict[str, int]  # Track input_tokens, output_tokens, total_tokens
 
 
 llm = ChatVertexAI(
@@ -348,6 +354,7 @@ def tool_executor_node(state: AppState) -> dict:
       if analysis_result["success"]:
         image_info = analysis_result["image_info"]
         analysis_text = analysis_result["analysis_result"]
+        image_token_usage = analysis_result.get("token_usage", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
         
         tool_output_for_message_content = f"Image Analysis Results for '{file_path_arg}':\n\n"
         
@@ -422,6 +429,18 @@ def tool_executor_node(state: AppState) -> dict:
   if tool_name_called_by_llm == view_image_file_tool.name and 'new_image_entry' in locals() and new_image_entry is not None:
     current_image_history = state.get("image_analysis_history", [])
     return_dict["image_analysis_history"] = current_image_history + [new_image_entry]
+    
+    # Update token usage if image analysis used tokens
+    if 'image_token_usage' in locals():
+      current_token_usage = state.get("token_usage", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+      current_token_usage["input_tokens"] += image_token_usage["input_tokens"]
+      current_token_usage["output_tokens"] += image_token_usage["output_tokens"]
+      current_token_usage["total_tokens"] += image_token_usage["total_tokens"]
+      return_dict["token_usage"] = current_token_usage
+      
+      print(f"Image analysis token usage - Input: {image_token_usage['input_tokens']}, "
+            f"Output: {image_token_usage['output_tokens']}, "
+            f"Total: {image_token_usage['total_tokens']}")
   
   return return_dict
 
@@ -558,14 +577,182 @@ def agent_node(state: AppState) -> dict:
   )
 
   messages_for_llm = [SystemMessage(content=system_prompt_content)]
+  
   # Add all non-SystemMessages from the current state to the history
-  messages_for_llm.extend([m for m in current_messages if not isinstance(m, SystemMessage)])
+  non_system_messages = [m for m in current_messages if not isinstance(m, SystemMessage)]
+  
+  # Implement message trimming to prevent context window overflow
+  if len(non_system_messages) > MAX_MESSAGES_IN_CONTEXT:
+    print(f"WARNING: Message history has {len(non_system_messages)} messages, exceeding limit of {MAX_MESSAGES_IN_CONTEXT}")
+    print(f"Trimming to keep last {KEEP_LAST_N_MESSAGES} messages...")
+    
+    # Always keep the first message (initial context) and the last N messages
+    if len(non_system_messages) > 0:
+      trimmed_messages = [non_system_messages[0]]  # Keep initial context
+      trimmed_messages.extend(non_system_messages[-KEEP_LAST_N_MESSAGES:])
+      
+      # Add a summary message about what was trimmed
+      num_trimmed = len(non_system_messages) - len(trimmed_messages)
+      trim_notice = HumanMessage(content=f"[System Notice: {num_trimmed} older messages were trimmed to stay within context limits. The investigation continues from the most recent messages.]")
+      trimmed_messages.insert(1, trim_notice)  # Insert after initial context
+      
+      non_system_messages = trimmed_messages
+  
+  # Check and truncate individual messages that are too large
+  MAX_MESSAGE_LENGTH = 100000  # 100K chars per message
+  processed_messages = []
+  
+  for msg in non_system_messages:
+    # Clean content to ensure valid UTF-8
+    if isinstance(msg.content, str):
+      # Remove invalid UTF-8 characters (surrogates)
+      try:
+        # Try to encode/decode to catch invalid characters
+        clean_content = msg.content.encode('utf-8', errors='replace').decode('utf-8')
+        if clean_content != msg.content:
+          print(f"WARNING: Cleaned invalid UTF-8 characters from {type(msg).__name__}")
+      except Exception:
+        # If even that fails, use a more aggressive cleaning
+        clean_content = ''.join(char for char in msg.content if ord(char) < 0x10000)
+        print(f"WARNING: Aggressively cleaned content in {type(msg).__name__}")
+      
+      # Now check length on cleaned content
+      if len(clean_content) > MAX_MESSAGE_LENGTH:
+        print(f"WARNING: {type(msg).__name__} content is {len(clean_content)} chars, truncating to {MAX_MESSAGE_LENGTH}")
+        truncated_content = clean_content[:MAX_MESSAGE_LENGTH] + f"\n\n[... {len(clean_content) - MAX_MESSAGE_LENGTH} characters truncated ...]"
+      else:
+        truncated_content = clean_content
+      
+      # Create new message with cleaned/truncated content, preserving other attributes
+      if isinstance(msg, AIMessage):
+        new_msg = AIMessage(content=truncated_content, tool_calls=msg.tool_calls if hasattr(msg, 'tool_calls') else None)
+      elif isinstance(msg, ToolMessage):
+        new_msg = ToolMessage(content=truncated_content, tool_call_id=msg.tool_call_id)
+      elif isinstance(msg, HumanMessage):
+        new_msg = HumanMessage(content=truncated_content)
+      else:
+        new_msg = msg  # Fallback, shouldn't happen
+        
+      processed_messages.append(new_msg)
+    else:
+      processed_messages.append(msg)
+  
+  messages_for_llm.extend(processed_messages)
+  
+  # Final safety check - total context size
+  total_context_size = sum(len(str(msg.content)) for msg in messages_for_llm)
+  MAX_TOTAL_CONTEXT = 1500000  # 1.5MB total context limit (conservative for Gemini)
+  
+  if total_context_size > MAX_TOTAL_CONTEXT:
+    print(f"ERROR: Total context size ({total_context_size:,} chars) exceeds safety limit ({MAX_TOTAL_CONTEXT:,} chars)")
+    print("Attempting aggressive message trimming...")
+    
+    # Keep only system message, initial context, and last 10 messages
+    emergency_messages = [messages_for_llm[0]]  # System message
+    if len(processed_messages) > 0:
+      emergency_messages.append(processed_messages[0])  # Initial context
+      emergency_messages.extend(processed_messages[-10:])  # Last 10 messages
+      
+    messages_for_llm = emergency_messages
+    new_total = sum(len(str(msg.content)) for msg in messages_for_llm)
+    print(f"After emergency trimming: {new_total:,} chars with {len(messages_for_llm)} messages")
 
-  response = llm_with_tool.invoke(messages_for_llm)
+  # Print context usage statistics
+  print(f"Sending {len(messages_for_llm)} messages to LLM (total: {total_context_size:,} chars)")
+
+  # Debug: Save the problematic messages for inspection if error occurs
+  debug_file_path = None
+  try:
+    response = llm_with_tool.invoke(messages_for_llm)
+  except Exception as e:
+    # Save debug information
+    report_session_id = state.get("report_session_id", "unknown_session")
+    debug_dir = Path("reports") / report_session_id / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    debug_file_path = debug_dir / f"llm_error_{timestamp}.txt"
+    
+    with open(debug_file_path, "w", encoding="utf-8") as f:
+      f.write(f"LLM Invocation Error Debug Information\n")
+      f.write(f"=====================================\n\n")
+      f.write(f"Error Type: {type(e).__name__}\n")
+      f.write(f"Error Message: {str(e)}\n\n")
+      
+      f.write(f"Request Statistics:\n")
+      f.write(f"- Number of messages: {len(messages_for_llm)}\n")
+      f.write(f"- System prompt length: {len(system_prompt_content)} characters\n")
+      
+      total_length = sum(len(str(msg.content)) for msg in messages_for_llm)
+      f.write(f"- Total content length: {total_length} characters\n\n")
+      
+      f.write(f"Messages Details:\n")
+      f.write(f"-----------------\n")
+      
+      for i, msg in enumerate(messages_for_llm):
+        f.write(f"\nMessage {i} - {type(msg).__name__}:\n")
+        f.write(f"  Content length: {len(str(msg.content))} chars\n")
+        
+        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+          f.write(f"  Tool calls: {len(msg.tool_calls)}\n")
+          for j, tc in enumerate(msg.tool_calls):
+            f.write(f"    Tool {j}: {tc.get('name', 'unknown')} - Args: {list(tc.get('args', {}).keys())}\n")
+        
+        if isinstance(msg.content, list):
+          f.write(f"  Content type: list with {len(msg.content)} items\n")
+          for j, item in enumerate(msg.content):
+            if isinstance(item, dict):
+              f.write(f"    Item {j}: type={item.get('type', 'unknown')}")
+              if item.get('type') == 'text':
+                f.write(f" length={len(item.get('text', ''))}")
+              f.write("\n")
+        else:
+          f.write(f"  Content type: {type(msg.content).__name__}\n")
+        
+        # Write first 500 chars of content (with safe encoding)
+        content_str = str(msg.content)
+        try:
+          # Clean the content for safe writing
+          safe_content = content_str.encode('utf-8', errors='replace').decode('utf-8')
+          f.write(f"  Content preview: {safe_content[:500]}{'...' if len(safe_content) > 500 else ''}\n")
+        except Exception as e:
+          f.write(f"  Content preview: [Error displaying content: {str(e)}]\n")
+    
+    print(f"\n!!! ERROR: LLM invocation failed !!!")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error message: {str(e)}")
+    print(f"\nDebug information saved to: {debug_file_path}")
+    print(f"Total message content length: {total_length} characters")
+    print(f"Number of messages: {len(messages_for_llm)}")
+    
+    # Check for common issues
+    if total_length > 1000000:  # 1MB is a rough estimate
+      print("\nWARNING: Total content length is very large. This might exceed Gemini's context window.")
+    
+    if len(messages_for_llm) > 100:
+      print("\nWARNING: Large number of messages. Consider implementing message pruning.")
+    
+    # Re-raise the exception
+    raise
+
+  # Capture token usage from the response
+  current_token_usage = state.get("token_usage", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+  
+  if hasattr(response, 'response_metadata') and response.response_metadata:
+    usage_stats = response.response_metadata.get('usage_metadata', {})
+    if usage_stats:
+      # Update token counts
+      current_token_usage["input_tokens"] += usage_stats.get('input_tokens', 0)
+      current_token_usage["output_tokens"] += usage_stats.get('output_tokens', 0)
+      current_token_usage["total_tokens"] += usage_stats.get('total_tokens', 0)
+      
+      print(f"Token usage for this call - Input: {usage_stats.get('input_tokens', 0)}, "
+            f"Output: {usage_stats.get('output_tokens', 0)}, "
+            f"Total: {usage_stats.get('total_tokens', 0)}")
 
   # REMOVED Saving LLM Response to File
 
-  return {"messages": [response]}
+  return {"messages": [response], "token_usage": current_token_usage}
 
 
 def human_tool_review_node(state: AppState) -> dict:

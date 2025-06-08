@@ -17,5 +17,16 @@ services:
     command: [
       "/mnt/dump.mem",
       "--context",
-      "A user's computer crashed unexpectedly and we have obtained a memory dump for analysis. The user reports seeing a black window pop up with something being executed just before the crash. At the time of the crash, the user was working on a drawing application. Our objective is to recover important files from the system and understand what caused the crash. Please conduct a thorough analysis focusing on: 1) Identifying the process associated with the black window that appeared before the crash, 2) Locating and extracting any important user files, particularly those related to drawing or creative work, 3) Determining what was being executed in the suspicious black window, 4) Finding any forensic artifacts that could explain the crash. Note: This investigation should uncover 3 specific flags hidden within the memory dump. Please document all findings, recovered files, and the 3 flags in your analysis.",
+      "You are analyzing a memory dump from a computer that crashed unexpectedly. According to the user (who mentioned it was their sister's computer), they witnessed a black command window appear with something being executed shortly before the crash occurred. At the time of the incident, the user was actively drawing something on the computer. 
+
+      Your objectives are to:
+      1) Identify what was running in the black window that appeared before the crash
+      2) Recover any important files from the system, particularly any that the user might consider valuable
+      3) Investigate what the user was drawing at the time of the crash
+      4) Determine if there are any compressed/archived files that might contain important data
+      5) Look for any user credentials or authentication artifacts that might be relevant
+
+      This is a CTF-style investigation with 3 specific flags hidden within the memory dump that need to be discovered. Each flag follows the format: flag{...}
+
+      Please conduct a systematic analysis starting with basic system profiling, then examine running processes, and investigate any suspicious or notable findings. Document your analysis process, findings, and any flags discovered."
     ]

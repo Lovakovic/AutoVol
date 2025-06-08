@@ -104,7 +104,8 @@ def analyze(
     "last_user_review_decision": None,
     "report_session_id": report_session_id,
     "image_analysis_history": [],
-    "multimodal_context": {}
+    "multimodal_context": {},
+    "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
   }
 
   thread_id = str(uuid.uuid4())
@@ -441,13 +442,16 @@ def analyze(
               final_summary_text = assembled_text
               break
 
+      final_token_usage = final_full_state_for_report.get("token_usage", None)
+      
       report_msg = generate_report(
         log=final_log,
         dump_path=final_dump_path,
         initial_context=final_initial_context,
         profile=str(final_profile),
         final_summary=final_summary_text,
-        report_session_id=session_id_for_report
+        report_session_id=session_id_for_report,
+        token_usage=final_token_usage
       )
       print(report_msg)
     else:

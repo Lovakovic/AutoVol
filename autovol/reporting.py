@@ -9,7 +9,8 @@ def generate_report(
   initial_context: str,
   profile: str,
   final_summary: str = "",
-  report_session_id: str = ""
+  report_session_id: str = "",
+  token_usage: Dict[str, int] = None
 ) -> str:
   if not report_session_id:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -41,6 +42,15 @@ def generate_report(
   else:
     summary_report_content += "No final summary was provided by the LLM.\n\n"
 
+  summary_report_content += f"---\n\n"
+  
+  # Add token usage statistics if available
+  if token_usage:
+    summary_report_content += f"## LLM Token Usage\n\n"
+    summary_report_content += f"- **Input Tokens:** {token_usage.get('input_tokens', 0):,}\n"
+    summary_report_content += f"- **Output Tokens:** {token_usage.get('output_tokens', 0):,}\n"
+    summary_report_content += f"- **Total Tokens:** {token_usage.get('total_tokens', 0):,}\n\n"
+  
   summary_report_content += f"---\n\n"
   summary_report_content += f"For a detailed step-by-step breakdown of the analysis, including all commands and links to full outputs, please see the [Detailed Analysis Report](./{details_report_filename}).\n"
   summary_report_content += f"Raw command outputs are stored in the `command_outputs` subdirectory within this session's report folder.\n"
