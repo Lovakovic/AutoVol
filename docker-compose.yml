@@ -17,46 +17,10 @@ services:
       - "./gcloud_keys/vertex_key.json:/gcloud_key/vertex_key.json:ro"
       - "./autovol_output:/app/reports"
 
+    # This is an exact copy-pasted scenario from the original Ramnit Lab exertise from CyberDefenders
+    # https://cyberdefenders.org/blueteam-ctf-challenges/ramnit/
     command: [
       "/mnt/dump.mem",
       "--context",
-      "You are analyzing a memory dump from a workstation where an intrusion detection system has alerted to suspicious behavior, indicating a likely malware intrusion. This memory dump has been taken for forensic analysis.
-
-      Your investigation objectives are to:
-      
-      1) **Process Analysis**: Identify the process responsible for the suspicious activity
-         - Find the name of the malicious process
-         - Determine the exact path of the executable for this process
-      
-      2) **Network Analysis**: Investigate the malware's communication strategy
-         - Identify any IP addresses the malware attempted to connect to
-         - Find domains associated with the malware's network activity
-         - Note: The geographical location (city) of IP addresses may be relevant
-      
-      3) **Malware Analysis**: Extract forensic artifacts about the malware
-         - Calculate the SHA1 hash of the malware executable
-         - Determine the compilation timestamp of the malware
-         - Look for any other IOCs (Indicators of Compromise)
-      
-      4) **System Impact**: Document any changes or suspicious activities
-         - Check for persistence mechanisms
-         - Look for any data exfiltration attempts
-         - Identify any system modifications
-      
-      This is a real malware incident investigation. Please conduct a systematic analysis starting with:
-      - System profiling and OS detection
-      - Process listing and analysis
-      - Network connections examination
-      - File system artifacts
-      - Registry analysis (if Windows)
-      
-      Focus on finding concrete evidence that answers:
-      - What is the malicious process name?
-      - What is its executable path?
-      - What IP address did it connect to?
-      - What domain is associated with the malware?
-      - What is the SHA1 hash of the malware?
-      - When was the malware compiled?
-      
-      Document all findings with supporting evidence from the memory dump."
+      "Our intrusion detection system has alerted us to suspicious behavior on a workstation, pointing to a likely malware intrusion. A memory dump of this system has been taken for analysis. Your task is to analyze this dump, trace the malware’s actions, and report key findings."
     ]

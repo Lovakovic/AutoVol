@@ -33,7 +33,7 @@ In `/autovol/agent.py`, comment/uncomment the desired model configuration:
 ```python
 # Claude configuration
 llm = ChatAnthropic(
-  model="claude-3-5-sonnet-20241022",
+  model="claude-sonnet-4-20250514",
   temperature=0.7,
   max_tokens=8000,
 )
@@ -53,41 +53,8 @@ llm = ChatVertexAI(
 ```python
 # OpenAI configuration
 llm = ChatOpenAI(
-  model="gpt-4o",
+  model="o4-mini",
   temperature=0.7,
   max_tokens=8000,
 )
 ```
-
-## Testing
-
-After switching models, test with:
-```bash
-python test_claude.py  # Modify for your chosen model
-```
-
-## Notes
-
-- All three models support tool calling, which is required for AutoVol
-- Token usage tracking is handled automatically for all models
-- Context window limits vary by model:
-  - Claude 3.5 Sonnet: 200K tokens
-  - Gemini 2.5 Pro: 2M tokens
-  - GPT-4o: 128K tokens
-
-## Model-Specific Considerations
-
-### Claude
-- Excellent at following complex instructions
-- Strong reasoning capabilities
-- May include thinking process in metadata
-
-### Gemini
-- Very large context window
-- Good for processing large amounts of forensic data
-- Multimodal capabilities for image analysis
-
-### OpenAI
-- Well-tested and stable
-- Good balance of speed and capability
-- Strong tool use implementation

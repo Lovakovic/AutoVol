@@ -67,11 +67,13 @@ Using Docker is the recommended way to run AutoVol, as it handles all dependenci
    ```
 
 4. **Run AutoVol:**
-   The `docker-compose.yml` includes a default command. To run it:
+   To run AutoVol execute:
 
    ```bash
-   docker compose up
+   docker compose run autovol
    ```
+
+   **Important:** You must use `docker compose run` instead of `docker compose up` to ensure the container runs interactively and allows you access to the CLI and interact with the agent. The `docker compose up` command is typically used for services that run in the background or continuously.
 
    This will start the analysis with the dump and context specified in the `command:` section of `docker-compose.yml`.
 

@@ -4,8 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Add other models">
+    <list default="true" id="80ab9267-c05d-420e-8607-cfd8f4c012e6" name="Changes" comment="Change scenario">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/MODEL_SWITCHING.md" beforeDir="false" afterPath="$PROJECT_DIR$/MODEL_SWITCHING.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/autovol/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/autovol/agent.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -81,8 +84,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
-        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
+        <option value="bundled-js-predefined-d6986cc7102b-b26f3e71634d-JavaScript-PY-251.26094.141" />
+        <option value="bundled-python-sdk-9f8e2b94138c-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.26094.141" />
       </set>
     </attachedChunks>
   </component>
@@ -114,6 +117,11 @@
       <workItem from="1749277075541" duration="8106000" />
       <workItem from="1749291172480" duration="2237000" />
       <workItem from="1749375315542" duration="14912000" />
+      <workItem from="1749490215556" duration="601000" />
+      <workItem from="1749747694456" duration="2000" />
+      <workItem from="1749758473933" duration="862000" />
+      <workItem from="1749912713681" duration="3000" />
+      <workItem from="1750000472366" duration="658000" />
     </task>
     <task id="LOCAL-00001" summary="Add pythonInterpreter tool">
       <option name="closed" value="true" />
