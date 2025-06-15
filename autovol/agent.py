@@ -45,19 +45,19 @@ class AppState(TypedDict):
 
 
 # Gemini configuration
-llm = ChatVertexAI(
-  model="gemini-2.5-pro-preview-05-06",
-  temperature=0.7,
-  max_output_tokens=8000,
-)
+# llm = ChatVertexAI(
+#   model="gemini-2.5-pro-preview-05-06",
+#   temperature=0.7,
+#   max_output_tokens=8000,
+# )
 
 # Claude configuration
-# llm = ChatAnthropic(
-#   model="claude-sonnet-4-20250514",
-#   max_tokens=32000,
-#   thinking={"type": "enabled", "budget_tokens": 4000},
-#   api_key=os.getenv("ANTHROPIC_API_KEY")
-# )
+llm = ChatAnthropic(
+  model="claude-sonnet-4-20250514",
+  max_tokens=32000,
+  thinking={"type": "enabled", "budget_tokens": 4000},
+  api_key=os.getenv("ANTHROPIC_API_KEY")
+)
 
 
 # OpenAI configuration
